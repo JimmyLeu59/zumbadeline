@@ -31,6 +31,7 @@ class Track {
     this.documentType,
     this.teachingNotes,
     this.lastPlayedAt,
+    this.spotifyUrl,
   });
 
   final String id;
@@ -43,6 +44,7 @@ class Track {
   final ChoreographyDocumentType? documentType;
   final String? teachingNotes;
   final DateTime? lastPlayedAt;
+  final String? spotifyUrl;
 
   factory Track.fromMap(Map<String, dynamic> map) {
     return Track(
@@ -67,11 +69,12 @@ class Track {
       lastPlayedAt: map['last_played_at'] == null
           ? null
           : DateTime.parse(map['last_played_at'] as String),
+      spotifyUrl: map['spotify_url'] as String?,
     );
   }
 
   Map<String, dynamic> toMap() => {
-        'id': id,
+        if (id.isNotEmpty) 'id': id,
         'title': title,
         'artist': artist,
         'style': style.name,
@@ -81,7 +84,13 @@ class Track {
         'document_type': documentType?.name,
         'teaching_notes': teachingNotes,
         'last_played_at': lastPlayedAt?.toIso8601String(),
+        'spotify_url': _emptyToNull(spotifyUrl),
       };
+}
+
+String? _emptyToNull(String? value) {
+  final trimmed = value?.trim();
+  return trimmed == null || trimmed.isEmpty ? null : trimmed;
 }
 
 T _enumByName<T extends Enum>(List<T> values, String? name) {

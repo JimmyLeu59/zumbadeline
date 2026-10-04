@@ -1,60 +1,61 @@
 import 'package:flutter/material.dart';
 
 abstract final class ZumbaTheme {
-  static const _magenta = Color(0xFFE91E8C);
-  static const _purple = Color(0xFF5A248A);
-  static const _lime = Color(0xFFB7E432);
-  static const _orange = Color(0xFFFFA726);
+  static const _magenta = Color(0xFFF500A8);
+  static const _purple = Color(0xFF7200C8);
+  static const _lime = Color(0xFFC6FF00);
+  static const _orange = Color(0xFFFF8A00);
 
   static ThemeData get light => _buildTheme(
-        brightness: Brightness.light,
-        background: const Color(0xFFFFF8FC),
-        surface: Colors.white,
-        foreground: const Color(0xFF25162D),
-      );
+    brightness: Brightness.light,
+    surface: Colors.white,
+    foreground: const Color(0xFF25162D),
+  );
 
   static ThemeData get dark => _buildTheme(
-        brightness: Brightness.dark,
-        background: const Color(0xFF17131B),
-        surface: const Color(0xFF241D2A),
-        foreground: const Color(0xFFFFF7FC),
-      );
+    brightness: Brightness.dark,
+    surface: const Color(0xFF241D2A),
+    foreground: const Color(0xFFFFF7FC),
+  );
 
   static ThemeData _buildTheme({
     required Brightness brightness,
-    required Color background,
     required Color surface,
     required Color foreground,
   }) {
-    final colors = ColorScheme.fromSeed(
-      seedColor: _magenta,
-      brightness: brightness,
-      primary: _magenta,
-      secondary: _orange,
-      tertiary: _lime,
-      surface: surface,
-      onSurface: foreground,
-    ).copyWith(
-      primary: _magenta,
-      secondary: _orange,
-      tertiary: _lime,
-      surface: surface,
-      onSurface: foreground,
-    );
+    final colors =
+        ColorScheme.fromSeed(
+          seedColor: _magenta,
+          brightness: brightness,
+          primary: _magenta,
+          secondary: _orange,
+          tertiary: _lime,
+          surface: surface,
+          onSurface: foreground,
+        ).copyWith(
+          primary: _magenta,
+          secondary: _orange,
+          tertiary: _lime,
+          surface: surface,
+          onSurface: foreground,
+        );
 
     return ThemeData(
       useMaterial3: true,
       brightness: brightness,
       colorScheme: colors,
-      scaffoldBackgroundColor: background,
+      scaffoldBackgroundColor: Colors.transparent,
       appBarTheme: AppBarTheme(
-        backgroundColor: background,
+        backgroundColor: Colors.transparent,
         foregroundColor: foreground,
         centerTitle: false,
         elevation: 0,
+        surfaceTintColor: Colors.transparent,
       ),
       cardTheme: CardThemeData(
-        color: surface,
+        color: surface.withValues(
+          alpha: brightness == Brightness.dark ? .91 : .94,
+        ),
         elevation: brightness == Brightness.dark ? 2 : 1,
         shadowColor: brightness == Brightness.dark
             ? _magenta.withValues(alpha: 0.24)
@@ -63,7 +64,7 @@ abstract final class ZumbaTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: surface,
+        fillColor: surface.withValues(alpha: .96),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
           borderSide: BorderSide.none,
@@ -72,13 +73,17 @@ abstract final class ZumbaTheme {
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           minimumSize: const Size(48, 48),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
       ),
-      textTheme: ThemeData(brightness: brightness).textTheme.apply(
-            bodyColor: foreground,
-            displayColor: foreground,
-          ),
+      textTheme: ThemeData(brightness: brightness).textTheme
+          .apply(bodyColor: foreground, displayColor: foreground),
+      dialogTheme: DialogThemeData(
+        backgroundColor: surface,
+        surfaceTintColor: Colors.transparent,
+      ),
     );
   }
 }

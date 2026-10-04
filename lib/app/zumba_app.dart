@@ -1,9 +1,31 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/supabase/supabase_providers.dart';
+import '../features/auth/presentation/auth_gate.dart';
 import 'theme/zumba_theme.dart';
 
-class ZumbaApp extends StatelessWidget {
+class ZumbaApp extends ConsumerStatefulWidget {
   const ZumbaApp({super.key});
+
+  @override
+  ConsumerState<ZumbaApp> createState() => _ZumbaAppState();
+}
+
+class _ZumbaAppState extends ConsumerState<ZumbaApp> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _restoreTheme());
+  }
+
+  Future<void> _restoreTheme() async {
+    final saved = ref.read(offlineStoreProvider).readString('theme_mode');
+    final modes = ThemeMode.values.where((mode) => mode.name == saved);
+    if (modes.isNotEmpty) {
+      ref.read(themeModeProvider.notifier).state = modes.first;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -12,44 +34,23 @@ class ZumbaApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ZumbaTheme.light,
       darkTheme: ZumbaTheme.dark,
-      themeMode: ThemeMode.system,
-      home: const _HomePage(),
-    );
-  }
-}
-
-class _HomePage extends StatelessWidget {
-  const _HomePage();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Zumba & Pédagogie')),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.music_note_rounded,
-                size: 72,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Prête à danser ?',
-                style: Theme.of(context).textTheme.headlineMedium,
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'La base de votre espace de gestion est installée.',
-                textAlign: TextAlign.center,
-              ),
-            ],
+      themeMode: ref.watch(themeModeProvider),
+      builder: (context, child) => Stack(
+        fit: StackFit.expand,
+        children: [
+          const Image(
+            image: AssetImage('assets/images/zumba_background.png'),
+            fit: BoxFit.cover,
           ),
-        ),
+          ColoredBox(
+            color: Theme.of(context).brightness == Brightness.dark
+                ? const Color(0xB8000614)
+                : const Color(0xB8FFFFFF),
+          ),
+          ?child,
+        ],
       ),
+      home: const AuthGate(),
     );
   }
 }

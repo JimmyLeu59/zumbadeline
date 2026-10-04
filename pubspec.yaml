@@ -7,15 +7,36 @@ environment:
   sdk: ^3.13.4
 
 dependencies:
+  connectivity_plus: ^7.3.2
+  excel: ^4.0.6
+  file_picker: ^13.1.0
   flutter:
     sdk: flutter
   flutter_riverpod: ^2.6.1
+  flutter_secure_storage: ^11.2.0
+  hive_flutter: ^1.1.0
+  image_picker: ^1.2.3
+  pdf: ^3.12.0
+  printing: ^5.14.3
+  share_plus: ^13.3.1
   supabase_flutter: ^2.8.4
+  url_launcher: ^6.3.3
+  uuid: ^4.5.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/images/zumba_background.png
+    - assets/images/app_logo.jpg
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/images/app_logo.jpg
+  min_sdk_android: 21
