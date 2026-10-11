@@ -89,6 +89,54 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.2"
+  camera:
+    dependency: "direct main"
+    description:
+      name: camera
+      sha256: "3f30ca0ff376f91534f23afa2a7aea06ebb6c889fd9e260642437b37e3d9f753"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.12.1"
+  camera_android_camerax:
+    dependency: transitive
+    description:
+      name: camera_android_camerax
+      sha256: "47645ffd20c597cb0edab4de20f3c89447b7eca90425ee13683b746275b18e2b"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.7.5+1"
+  camera_avfoundation:
+    dependency: transitive
+    description:
+      name: camera_avfoundation
+      sha256: e409a731fad3fca10daa9567cf981720398659e6390f871a4e0f576058ff8940
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.10.3+1"
+  camera_platform_interface:
+    dependency: transitive
+    description:
+      name: camera_platform_interface
+      sha256: "9365babc7488a9e93d0ed6dcccd917619fb12ea6f9e601519e1191d4890ee2fe"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.14.0"
+  camera_web:
+    dependency: transitive
+    description:
+      name: camera_web
+      sha256: "5aecf1ac4dd4a949c5a7820e590020acb2bc35425384ab87a030e1739bfe12e2"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.5+6"
+  camera_windows:
+    dependency: "direct main"
+    description:
+      name: camera_windows
+      sha256: da05937f6dff64fbbd2d64f74e4240b6da50d377031034704b0a12a9dfb4ea15
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.0"
   characters:
     dependency: transitive
     description:
@@ -465,7 +513,7 @@ packages:
     source: hosted
     version: "2.0.2"
   http:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: http
       sha256: "87721a4a50b19c7f1d49001e51409bddc46303966ce89a65af4f4e6004896412"
@@ -680,6 +728,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.0"
+  package_info_plus:
+    dependency: "direct main"
+    description:
+      name: package_info_plus
+      sha256: "73ef2cd5c11a7548f9b7f6fc2a4f6113de2e64aa2a70de63feede95548822908"
+      url: "https://pub.dev"
+    source: hosted
+    version: "10.2.2"
+  package_info_plus_platform_interface:
+    dependency: transitive
+    description:
+      name: package_info_plus_platform_interface
+      sha256: db762cb2f4f25ee60fb6359773861b0f199e00b90d237bd85a76a1e806b46ef4
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.1.0"
   passkeys_platform_interface:
     dependency: transitive
     description:
@@ -705,7 +769,7 @@ packages:
     source: hosted
     version: "1.1.0"
   path_provider:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: path_provider
       sha256: a7f4874f987173da295a61c181b8ee71dab59b332a486b391babf26a1b884825
@@ -973,6 +1037,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.4"
+  stream_transform:
+    dependency: transitive
+    description:
+      name: stream_transform
+      sha256: a00e5f18bffc764f923e7dec1038527f7fe7a1791361a7117f0358193f13d53a
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.1.2"
   string_scanner:
     dependency: transitive
     description:

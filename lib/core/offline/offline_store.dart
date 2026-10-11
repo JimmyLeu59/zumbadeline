@@ -79,6 +79,8 @@ class OfflineStore {
   Future<void> saveString(String key, String value) =>
       _box.put(_scopedKey(key), value);
 
+  Future<void> delete(String key) => _box.delete(_scopedKey(key));
+
   String? readString(String key) => _box.get(_scopedKey(key));
 
   List<Map<String, dynamic>>? readJsonList(String key) {

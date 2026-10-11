@@ -6,11 +6,14 @@ import '../offline/offline_store.dart';
 import '../reports/report_service.dart';
 import '../../features/agenda/data/session_service.dart';
 import '../../features/agenda/domain/class_session.dart';
+import '../../features/activities/domain/activity.dart';
 import '../../features/choreography/data/choreography_service.dart';
 import '../../features/choreography/domain/track.dart';
 import '../../features/finances/data/finance_service.dart';
 import '../../features/finances/domain/payment.dart';
 import '../../features/members/data/member_service.dart';
+import '../../features/members/data/card_notification_service.dart';
+import '../../features/members/domain/card_notification.dart';
 import '../../features/members/domain/member.dart';
 import '../../features/staff/data/staff_profile_service.dart';
 import '../../features/staff/domain/app_user_profile.dart';
@@ -34,6 +37,27 @@ final reportServiceProvider = Provider<ReportService>((ref) {
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
 
+final activitySelectionProvider = StateProvider<String?>((ref) => null);
+
+final activitiesProvider = FutureProvider<List<Activity>>((ref) async {
+  final offlineStore = ref.watch(offlineStoreProvider);
+  final client = ref.watch(supabaseClientProvider);
+  if (await offlineStore.isOnline()) {
+    final rows = await client
+        .from('activities')
+        .select('id, name, color_code, icon')
+        .eq('is_active', true)
+        .order('name');
+    await offlineStore.cacheJson('activities_cache', rows);
+    return rows.map(Activity.fromMap).toList(growable: false);
+  }
+  final cached = offlineStore.readJsonList('activities_cache');
+  if (cached == null) {
+    throw StateError('Aucune liste d’activités n’est disponible hors-ligne.');
+  }
+  return cached.map(Activity.fromMap).toList(growable: false);
+});
+
 final authStateProvider = StreamProvider<AuthState>((ref) {
   return ref.watch(supabaseClientProvider).auth.onAuthStateChange;
 });
@@ -45,7 +69,9 @@ final userProfileProvider = FutureProvider.family<AppUserProfile?, String>((
   final row = await ref
       .watch(supabaseClientProvider)
       .from('profiles')
-      .select('id, display_name, role, teaching_dances, photo_url')
+      .select(
+        'id, display_name, role, activity_id_access, teaching_dances, photo_url',
+      )
       .eq('id', userId)
       .maybeSingle();
   if (row == null) return null;
@@ -60,7 +86,10 @@ final staffProfileServiceProvider = Provider<StaffProfileService>((ref) {
   return StaffProfileService(ref.watch(supabaseClientProvider));
 });
 
-final staffPhotoUrlProvider = FutureProvider.family<String?, String?>((ref, path) {
+final staffPhotoUrlProvider = FutureProvider.family<String?, String?>((
+  ref,
+  path,
+) {
   return ref.watch(staffProfileServiceProvider).signedPhotoUrl(path);
 });
 
@@ -82,8 +111,21 @@ final memberServiceProvider = Provider<MemberService>((ref) {
   );
 });
 
-final memberPhotoUrlProvider =
-    FutureProvider.family<String?, String?>((ref, path) {
+final cardNotificationServiceProvider = Provider<CardNotificationService>((
+  ref,
+) {
+  return CardNotificationService(ref.watch(supabaseClientProvider));
+});
+
+final cardNotificationsProvider =
+    StreamProvider.family<List<CardNotification>, String>((ref, staffId) {
+      return ref.watch(cardNotificationServiceProvider).watchForStaff(staffId);
+    });
+
+final memberPhotoUrlProvider = FutureProvider.family<String?, String?>((
+  ref,
+  path,
+) {
   return ref.watch(memberServiceProvider).signedPhotoUrl(path);
 });
 
@@ -103,22 +145,47 @@ final membersProvider = FutureProvider<List<Member>>((ref) {
   return ref.watch(memberServiceProvider).listMembers();
 });
 
+final membersForActivityProvider = FutureProvider.family<List<Member>, String?>(
+  (ref, activityId) {
+    ref.watch(offlineStatusProvider);
+    return ref.watch(memberServiceProvider).listMembers(activityId: activityId);
+  },
+);
+
 final tracksProvider = FutureProvider<List<Track>>((ref) {
   ref.watch(offlineStatusProvider);
   return ref.watch(choreographyServiceProvider).listTracks();
 });
 
-final sessionsProvider = FutureProvider<List<ClassSession>>((ref) {
+final tracksForActivityProvider = FutureProvider.family<List<Track>, String?>((
+  ref,
+  activityId,
+) {
   ref.watch(offlineStatusProvider);
-  return ref.watch(sessionServiceProvider).listSessions();
+  return ref
+      .watch(choreographyServiceProvider)
+      .listTracks(activityId: activityId);
 });
 
-final paymentsProvider = FutureProvider<List<Payment>>((ref) {
-  return ref.watch(financeServiceProvider).listPayments();
+final sessionsProvider = FutureProvider.family<List<ClassSession>, String?>((
+  ref,
+  activityId,
+) {
+  ref.watch(offlineStatusProvider);
+  return ref.watch(sessionServiceProvider).listSessions(activityId: activityId);
 });
+
+final paymentsProvider = FutureProvider.family<List<Payment>, String?>(
+  (ref, activityId) =>
+      ref.watch(financeServiceProvider).listPayments(activityId: activityId),
+);
 
 final pricingProvider = FutureProvider<PricingSettings>((ref) {
   return ref.watch(financeServiceProvider).getPricing();
+});
+
+final subscriptionPlansProvider = FutureProvider<List<SubscriptionPlan>>((ref) {
+  return ref.watch(financeServiceProvider).listPlans();
 });
 
 final mostPlayedTracksProvider = FutureProvider((ref) {

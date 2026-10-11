@@ -6,10 +6,12 @@ import '../../../core/offline/offline_store.dart';
 import '../../../core/supabase/supabase_providers.dart';
 import '../../../features/agenda/domain/class_session.dart';
 import '../../../features/members/domain/member.dart';
+import '../../finances/domain/payment.dart';
 
 class AttendancePage extends ConsumerStatefulWidget {
-  const AttendancePage({super.key, this.initialSession});
+  const AttendancePage({super.key, this.activityId, this.initialSession});
 
+  final String? activityId;
   final ClassSession? initialSession;
 
   @override
@@ -19,6 +21,7 @@ class AttendancePage extends ConsumerStatefulWidget {
 class _AttendancePageState extends ConsumerState<AttendancePage> {
   String? _sessionId;
   String _search = '';
+  String? _initialLetter;
   String? _checkingMemberId;
   Future<List<Map<String, dynamic>>>? _attendanceFuture;
   static const _uuid = Uuid();
@@ -28,6 +31,15 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     super.initState();
     _sessionId = widget.initialSession?.id;
     if (_sessionId != null) _loadAttendance();
+  }
+
+  @override
+  void didUpdateWidget(covariant AttendancePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.activityId != widget.activityId) {
+      _sessionId = widget.initialSession?.id;
+      _loadAttendance();
+    }
   }
 
   void _loadAttendance() {
@@ -43,11 +55,34 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
 
   Future<void> _checkIn(Member member) async {
     final sessionId = _sessionId;
-    if (sessionId == null) return;
+    if (sessionId == null || _checkingMemberId != null) return;
+    setState(() => _checkingMemberId = member.id);
     try {
+      final sessions = await ref.read(sessionsProvider(widget.activityId).future);
+      final session = widget.initialSession ??
+          sessions.where((item) => item.id == sessionId).firstOrNull;
+      if (session == null) {
+        throw StateError('La séance sélectionnée n’est plus disponible.');
+      }
+      final activityId = session.activityId ?? widget.activityId;
+      if (activityId == null) {
+        throw StateError('La séance n’est rattachée à aucune activité.');
+      }
       final cards = await ref
           .read(memberServiceProvider)
-          .usableCards(member.id);
+          .usableCards(member.id, activityId: activityId);
+      if (!mounted) return;
+      final isOnline = await ref.read(offlineStoreProvider).isOnline();
+      var plans = const <SubscriptionPlan>[];
+      PricingSettings? pricing;
+      if (isOnline && cards.isEmpty) {
+        try {
+          plans = await ref.read(subscriptionPlansProvider.future);
+          pricing = await ref.read(pricingProvider.future);
+        } catch (error) {
+          throw StateError('Chargement des tarifs impossible : $error');
+        }
+      }
       if (!mounted) return;
       final choice = cards.isNotEmpty
           ? _CheckInChoice(
@@ -56,27 +91,60 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
             )
           : await showDialog<_CheckInChoice>(
               context: context,
-              builder: (_) => const _CheckInDialog(),
+              builder: (_) => _QuickCheckInDialog(
+                online: isOnline,
+                plans: plans,
+                pricing: pricing,
+              ),
             );
       if (choice == null || !mounted) return;
-      setState(() => _checkingMemberId = member.id);
-      await ref
-          .read(sessionServiceProvider)
-          .checkIn(
-            sessionId: sessionId,
-            memberId: member.id,
-            cardId: choice.cardId,
-            paymentMethod: choice.paymentMethod,
-            operationId: _uuid.v4(),
-          );
-      ref.invalidate(membersProvider);
+      var cardId = choice.cardId;
+      var alreadyCheckedIn = false;
+      if (choice.priceTier != null) {
+        final sale = await ref
+            .read(sessionServiceProvider)
+            .purchaseCardAndCheckIn(
+              sessionId: sessionId,
+              memberId: member.id,
+              priceTier: choice.priceTier!,
+              planCode: choice.planCode,
+              paymentMethod: choice.paymentMethod,
+              operationId: _uuid.v4(),
+            );
+        alreadyCheckedIn = sale['already_checked_in'] == true;
+        if (!alreadyCheckedIn) {
+          final card = sale['card'];
+          if (card is! Map || card['id'] is! String) {
+            throw const FormatException(
+              'Le pointage n’a pas retourné la carte créée.',
+            );
+          }
+          cardId = card['id'] as String;
+        }
+      } else {
+        await ref
+            .read(sessionServiceProvider)
+            .checkIn(
+              sessionId: sessionId,
+              memberId: member.id,
+              cardId: cardId,
+              paymentMethod: choice.paymentMethod,
+              operationId: _uuid.v4(),
+            );
+      }
+      ref.invalidate(membersForActivityProvider(widget.activityId));
+      if (!mounted) return;
       setState(_loadAttendance);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              choice.cardId == null
+              alreadyCheckedIn
+                  ? '${member.firstName} était déjà pointé(e) pour cette séance.'
+                  : cardId == null
                   ? '${member.firstName} : présence enregistrée et cours payé.'
+                  : choice.priceTier != null
+                  ? '${member.firstName} : carte vendue et présence enregistrée.'
                   : '${member.firstName} : présence enregistrée, carte débitée.',
             ),
           ),
@@ -107,13 +175,17 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
 
   @override
   Widget build(BuildContext context) {
-    final sessions = ref.watch(sessionsProvider);
-    final members = ref.watch(membersProvider);
+    final sessions = ref.watch(sessionsProvider(widget.activityId));
+    final members = ref.watch(membersForActivityProvider(widget.activityId));
     final offlineStatus = ref.watch(offlineStatusProvider).valueOrNull;
     return sessions.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, _) =>
-          _Retry(error: error, onRetry: () => ref.invalidate(sessionsProvider)),
+          _Retry(
+            error: error,
+            onRetry: () =>
+                ref.invalidate(sessionsProvider(widget.activityId)),
+          ),
       data: (allSessions) {
         final options = allSessions
             .where((session) => session.status != 'cancelled')
@@ -199,6 +271,28 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
             onChanged: (value) => setState(() => _search = value),
           ),
         ),
+        SizedBox(
+          height: 42,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            children: [
+              for (final letter in <String?>[
+                null,
+                ...List.generate(26, (index) => String.fromCharCode(65 + index)),
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: ChoiceChip(
+                    label: Text(letter ?? 'Tous'),
+                    selected: _initialLetter == letter,
+                    onSelected: (_) => setState(() => _initialLetter = letter),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+            ],
+          ),
+        ),
         _offlineBanner(offlineStatus),
         Expanded(child: _membersList(members, session.id)),
       ],
@@ -235,11 +329,20 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     return members.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, _) =>
-          _Retry(error: error, onRetry: () => ref.invalidate(membersProvider)),
+          _Retry(
+            error: error,
+            onRetry: () => ref.invalidate(
+              membersForActivityProvider(widget.activityId),
+            ),
+          ),
       data: (allMembers) {
         final query = _search.trim().toLowerCase();
         final visible = allMembers.where((member) {
           return member.isActive &&
+              (_initialLetter == null ||
+                  member.lastName
+                      .toUpperCase()
+                      .startsWith(_initialLetter!)) &&
               (query.isEmpty ||
                   member.fullName.toLowerCase().contains(query) ||
                   (member.phone?.contains(query) ?? false));
@@ -297,6 +400,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                       final isLoading = member.id == _checkingMemberId;
                       return Card(
                         child: ListTile(
+                          minVerticalPadding: 14,
                           leading: CircleAvatar(
                             child: Text(member.firstName[0].toUpperCase()),
                           ),
@@ -347,7 +451,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     List<Map<String, dynamic>> attendees,
   ) async {
     final session = widget.initialSession ??
-        (await ref.read(sessionsProvider.future)).where(
+        (await ref.read(sessionsProvider(widget.activityId).future)).where(
               (item) => item.id == sessionId,
             ).firstOrNull;
     if (session == null) return;
@@ -385,65 +489,174 @@ class _SessionHeader extends StatelessWidget {
 }
 
 class _CheckInChoice {
-  const _CheckInChoice({required this.cardId, required this.paymentMethod});
+  const _CheckInChoice({
+    required this.cardId,
+    required this.paymentMethod,
+    this.priceTier,
+    this.planCode,
+  });
+
   final String? cardId;
+  final String? priceTier;
+  final String? planCode;
   final String paymentMethod;
 }
 
-class _CheckInDialog extends StatefulWidget {
-  const _CheckInDialog();
+class _QuickCheckInDialog extends StatefulWidget {
+  const _QuickCheckInDialog({
+    required this.online,
+    required this.plans,
+    required this.pricing,
+  });
 
+  final bool online;
+  final List<SubscriptionPlan> plans;
+  final PricingSettings? pricing;
   @override
-  State<_CheckInDialog> createState() => _CheckInDialogState();
+  State<_QuickCheckInDialog> createState() => _QuickCheckInDialogState();
 }
 
-class _CheckInDialogState extends State<_CheckInDialog> {
+class _QuickCheckInDialogState extends State<_QuickCheckInDialog> {
   String _paymentMethod = 'cash';
+  String? _planCode;
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Enregistrer la présence'),
-    content: SizedBox(
-      width: 440,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Aucune carte utilisable : le tarif du cours à l’unité sera enregistré.',
+    title: const Text('Plus de cours sur la carte'),
+    content: SingleChildScrollView(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+          Text(
+            widget.online
+                ? 'Choisissez une carte ou réglez ce cours à l’unité.'
+                : 'Hors-ligne : le cours à l’unité sera synchronisé plus tard. '
+                    'La vente de carte nécessite une connexion.',
           ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            initialValue: _paymentMethod,
-            onChanged: (value) {
-              if (value != null) {
-                setState(() => _paymentMethod = value);
-              }
-            },
-            decoration: const InputDecoration(
-              labelText: 'Moyen de paiement (cours à l’unité)',
+          const SizedBox(height: 18),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'cash', label: Text('Espèces')),
+              ButtonSegment(value: 'cheque', label: Text('Chèque')),
+              ButtonSegment(value: 'card', label: Text('CB')),
+            ],
+            selected: {_paymentMethod},
+            onSelectionChanged: (value) =>
+                setState(() => _paymentMethod = value.first),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: widget.online
+                ? () => Navigator.pop(
+                    context,
+                    _CheckInChoice(
+                      cardId: null,
+                      priceTier: 'standard',
+                      paymentMethod: _paymentMethod,
+                    ),
+                  )
+                : null,
+            icon: const Icon(Icons.local_activity_outlined),
+            label: Text(
+              widget.pricing == null
+                  ? 'Carte standard · tarif indisponible'
+                  : 'Carte standard · ${widget.pricing!.cardPassCount} cours · '
+                        '${_money(widget.pricing!.firstCardPrice)}',
             ),
-            items: _paymentMethods
-                .map(
-                  (entry) =>
-                      DropdownMenuItem(value: entry.$1, child: Text(entry.$2)),
-                )
-                .toList(),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(60)),
           ),
-        ],
+          const SizedBox(height: 8),
+          FilledButton.tonalIcon(
+            onPressed: widget.online
+                ? () => Navigator.pop(
+                    context,
+                    _CheckInChoice(
+                      cardId: null,
+                      priceTier: 'loyalty',
+                      paymentMethod: _paymentMethod,
+                    ),
+                  )
+                : null,
+            icon: const Icon(Icons.replay_rounded),
+            label: Text(
+              widget.pricing == null
+                  ? 'Carte fidélité · tarif indisponible'
+                  : 'Carte fidélité · ${widget.pricing!.cardPassCount} cours · '
+                        '${_money(widget.pricing!.renewalCardPrice)}',
+            ),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(60)),
+          ),
+          const SizedBox(height: 8),
+          if (widget.online && widget.plans.isNotEmpty) ...[
+            DropdownButtonFormField<String>(
+              initialValue: _planCode,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Forfait mensuel / trimestriel',
+              ),
+              items: [
+                for (final plan in widget.plans)
+                  DropdownMenuItem(
+                    value: plan.code,
+                    child: Text(
+                      '${plan.label} · ${plan.price.toStringAsFixed(0)} €',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: (value) => setState(() => _planCode = value),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: _planCode == null
+                  ? null
+                  : () => Navigator.pop(
+                      context,
+                      _CheckInChoice(
+                        cardId: null,
+                        priceTier: 'standard',
+                        planCode: _planCode,
+                        paymentMethod: _paymentMethod,
+                      ),
+                    ),
+              icon: const Icon(Icons.event_repeat_outlined),
+              label: const Text('Vendre le forfait'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          OutlinedButton.icon(
+            onPressed: () => Navigator.pop(
+              context,
+              _CheckInChoice(
+                cardId: null,
+                paymentMethod: _paymentMethod,
+              ),
+            ),
+            icon: const Icon(Icons.payments_outlined),
+            label: Text(
+              widget.pricing == null
+                  ? 'Cours à l’unité · tarif serveur'
+                  : 'Cours à l’unité · '
+                        '${_money(widget.pricing!.singleClassPrice)}',
+            ),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(60),
+            ),
+          ),
+          ],
+        ),
       ),
     ),
     actions: [
       TextButton(
         onPressed: () => Navigator.pop(context),
         child: const Text('Retour'),
-      ),
-      FilledButton(
-        onPressed: () => Navigator.pop(
-          context,
-          _CheckInChoice(cardId: null, paymentMethod: _paymentMethod),
-        ),
-        child: const Text('Confirmer'),
       ),
     ],
   );
@@ -469,12 +682,7 @@ class _Retry extends StatelessWidget {
   );
 }
 
-const _paymentMethods = [
-  ('cash', 'Espèces'),
-  ('cheque', 'Chèque'),
-  ('bank_transfer', 'Virement'),
-  ('card', 'Carte bancaire'),
-];
-
 String _dateLabel(DateTime value) =>
     '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}/${value.year}';
+
+String _money(double amount) => '${amount.toStringAsFixed(2)} €';

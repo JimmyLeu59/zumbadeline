@@ -1,4 +1,4 @@
-class Member {
+﻿class Member {
   const Member({
     required this.id,
     required this.firstName,
@@ -15,6 +15,11 @@ class Member {
     this.emergencyContactPhone,
     this.notes,
     this.remainingPasses = 0,
+    this.subscriptionUntil,
+    this.cardExpiringAt,
+    this.cardHasLastClass = false,
+    this.activityIds = const [],
+    this.activityNames = const [],
   });
 
   final String id;
@@ -32,8 +37,17 @@ class Member {
   final String? notes;
   final bool isActive;
   final int remainingPasses;
+  final DateTime? subscriptionUntil;
+  final DateTime? cardExpiringAt;
+  final bool cardHasLastClass;
+  final List<String> activityIds;
+  final List<String> activityNames;
 
   String get fullName => '$firstName $lastName';
+  int? get membershipDaysRemaining =>
+      _daysUntil(membershipValidUntil);
+  int? get subscriptionDaysRemaining => _daysUntil(subscriptionUntil);
+
   bool get membershipIsCurrent {
     final validUntil = membershipValidUntil;
     if (validUntil == null) return false;
@@ -42,7 +56,25 @@ class Member {
     return !validUntil.isBefore(todayDate);
   }
 
-  factory Member.fromMap(Map<String, dynamic> map, {int remainingPasses = 0}) {
+  int? _daysUntil(DateTime? expiryDate) {
+    if (expiryDate == null) return null;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final expiry = DateTime(
+      expiryDate.year,
+      expiryDate.month,
+      expiryDate.day,
+    );
+    return expiry.difference(today).inDays;
+  }
+
+  factory Member.fromMap(
+    Map<String, dynamic> map, {
+    int remainingPasses = 0,
+    DateTime? subscriptionUntil,
+    DateTime? cardExpiringAt,
+    bool cardHasLastClass = false,
+  }) {
     DateTime? date(String key) {
       final value = map[key] as String?;
       return value == null ? null : DateTime.tryParse(value);
@@ -64,6 +96,15 @@ class Member {
       notes: map['notes'] as String?,
       isActive: map['is_active'] as bool? ?? true,
       remainingPasses: remainingPasses,
+      subscriptionUntil: subscriptionUntil,
+      cardExpiringAt: cardExpiringAt,
+      cardHasLastClass: cardHasLastClass,
+      activityIds: (map['activity_ids'] as List<dynamic>? ?? [])
+          .whereType<String>()
+          .toList(growable: false),
+      activityNames: (map['activity_names'] as List<dynamic>? ?? [])
+          .whereType<String>()
+          .toList(growable: false),
     );
   }
 

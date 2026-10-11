@@ -4,26 +4,31 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/supabase/supabase_providers.dart';
 
 class StatisticsPage extends ConsumerWidget {
-  const StatisticsPage({super.key});
+  const StatisticsPage({this.activityId, super.key});
+
+  final String? activityId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final members = ref.watch(membersProvider);
-    final sessions = ref.watch(sessionsProvider);
-    final tracks = ref.watch(tracksProvider);
+    final members = ref.watch(membersForActivityProvider(activityId));
+    final sessions = ref.watch(sessionsProvider(activityId));
+    final tracks = ref.watch(tracksForActivityProvider(activityId));
     final plays = ref.watch(mostPlayedTracksProvider);
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        Text('Vue d’ensemble', style: Theme.of(context).textTheme.headlineSmall),
+        Text(
+          'Vue d’ensemble',
+          style: Theme.of(context).textTheme.headlineSmall,
+        ),
         const SizedBox(height: 16),
         LayoutBuilder(
           builder: (context, constraints) {
             final columns = constraints.maxWidth > 900
                 ? 4
                 : constraints.maxWidth > 560
-                    ? 2
-                    : 1;
+                ? 2
+                : 1;
             final values = [
               _SummaryValue(
                 title: 'Adhérents actifs',
@@ -59,7 +64,7 @@ class StatisticsPage extends ConsumerWidget {
                 icon: Icons.notification_important_outlined,
                 future: members.when(
                   data: (value) =>
-                      '${value.where((member) => member.isActive && member.remainingPasses <= 1).length}',
+                      '${value.where((member) => member.isActive && member.subscriptionUntil == null && member.remainingPasses <= 1).length}',
                   loading: () => '…',
                   error: (_, stackTrace) => 'Erreur',
                 ),
@@ -72,7 +77,10 @@ class StatisticsPage extends ConsumerWidget {
               runSpacing: 12,
               children: [
                 for (final item in values)
-                  SizedBox(width: width, child: _SummaryCard(value: item)),
+                  SizedBox(
+                    width: width,
+                    child: _SummaryCard(value: item),
+                  ),
               ],
             );
           },
@@ -125,9 +133,9 @@ class StatisticsPage extends ConsumerWidget {
           alignment: Alignment.centerLeft,
           child: OutlinedButton.icon(
             onPressed: () {
-              ref.invalidate(membersProvider);
-              ref.invalidate(sessionsProvider);
-              ref.invalidate(tracksProvider);
+              ref.invalidate(membersForActivityProvider(activityId));
+              ref.invalidate(sessionsProvider(activityId));
+              ref.invalidate(tracksForActivityProvider(activityId));
               ref.invalidate(mostPlayedTracksProvider);
             },
             icon: const Icon(Icons.refresh),
@@ -156,28 +164,26 @@ class _SummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Row(
-            children: [
-              CircleAvatar(
-                child: Icon(value.icon),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(value.title),
-                    Text(
-                      value.future,
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
-                  ],
+    child: Padding(
+      padding: const EdgeInsets.all(18),
+      child: Row(
+        children: [
+          CircleAvatar(child: Icon(value.icon)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(value.title),
+                Text(
+                  value.future,
+                  style: Theme.of(context).textTheme.headlineSmall,
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      );
+        ],
+      ),
+    ),
+  );
 }

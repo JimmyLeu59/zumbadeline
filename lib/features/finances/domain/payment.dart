@@ -79,3 +79,30 @@ class PricingSettings {
         'currency': currency,
       };
 }
+
+class SubscriptionPlan {
+  const SubscriptionPlan({
+    required this.code,
+    required this.label,
+    required this.period,
+    required this.weeklyLimit,
+    required this.price,
+  });
+
+  final String code;
+  final String label;
+  final String period;
+  final int weeklyLimit;
+  final double price;
+
+  String get validityLabel => period == 'month' ? '30 jours' : '3 mois';
+
+  factory SubscriptionPlan.fromMap(Map<String, dynamic> map) =>
+      SubscriptionPlan(
+        code: map['code'] as String,
+        label: map['label'] as String,
+        period: map['period'] as String,
+        weeklyLimit: map['weekly_limit'] as int,
+        price: (map['price'] as num).toDouble(),
+      );
+}

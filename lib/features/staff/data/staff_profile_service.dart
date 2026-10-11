@@ -12,7 +12,9 @@ class StaffProfileService {
   Future<List<AppUserProfile>> listProfiles() async {
     final rows = await _client
         .from('profiles')
-        .select('id, display_name, role, teaching_dances, photo_url')
+        .select(
+          'id, display_name, role, activity_id_access, teaching_dances, photo_url',
+        )
         .order('display_name');
     return rows
         .map((row) => AppUserProfile.fromMap(row))

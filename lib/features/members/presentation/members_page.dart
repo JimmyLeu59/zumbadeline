@@ -1,13 +1,27 @@
+import 'dart:async';
+
+import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/supabase/supabase_providers.dart';
+import '../../activities/domain/activity.dart';
 import '../domain/member.dart';
 
 class MembersPage extends ConsumerStatefulWidget {
-  const MembersPage({super.key});
+  const MembersPage({
+    this.activityId,
+    this.initialMemberId,
+    this.onInitialMemberOpened,
+    super.key,
+  });
+
+  final String? activityId;
+  final String? initialMemberId;
+  final VoidCallback? onInitialMemberOpened;
 
   @override
   ConsumerState<MembersPage> createState() => _MembersPageState();
@@ -18,14 +32,28 @@ class _MembersPageState extends ConsumerState<MembersPage> {
   bool _activeOnly = true;
 
   Future<void> _editMember([Member? member]) async {
-    final edited = await showDialog<Member>(
-      context: context,
-      builder: (_) => _MemberFormDialog(member: member),
-    );
-    if (edited == null || !mounted) return;
     try {
-      await ref.read(memberServiceProvider).saveMember(edited);
-      ref.invalidate(membersProvider);
+      final activities = await ref.read(activitiesProvider.future);
+      if (!mounted) return;
+      final existingIds = member == null
+          ? <String>[if (widget.activityId != null) widget.activityId!]
+          : member.activityIds;
+      final edited = await showDialog<Member>(
+        context: context,
+        builder: (_) => _MemberFormDialog(
+          member: member,
+          activities: activities,
+          initialActivityIds: existingIds,
+        ),
+      );
+      if (edited == null || !mounted) return;
+      await ref
+          .read(memberServiceProvider)
+          .saveMember(edited, activityIds: edited.activityIds);
+      ref.invalidate(membersForActivityProvider(null));
+      for (final activity in activities) {
+        ref.invalidate(membersForActivityProvider(activity.id));
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('${edited.fullName} enregistré(e).')),
@@ -59,18 +87,18 @@ class _MembersPageState extends ConsumerState<MembersPage> {
       }
       final request = await showDialog<_PassAdjustment>(
         context: context,
-        builder: (_) => _PassAdjustmentDialog(
-          memberName: member.fullName,
-          cards: cards,
-        ),
+        builder: (_) =>
+            _PassAdjustmentDialog(memberName: member.fullName, cards: cards),
       );
       if (request == null || !mounted) return;
-      await ref.read(memberServiceProvider).adjustCardPasses(
-        cardId: request.cardId,
-        remainingPasses: request.remainingPasses,
-        reason: request.reason,
-      );
-      ref.invalidate(membersProvider);
+      await ref
+          .read(memberServiceProvider)
+          .adjustCardPasses(
+            cardId: request.cardId,
+            remainingPasses: request.remainingPasses,
+            reason: request.reason,
+          );
+      ref.invalidate(membersForActivityProvider(widget.activityId));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Solde de la carte mis à jour.')),
@@ -82,16 +110,17 @@ class _MembersPageState extends ConsumerState<MembersPage> {
   }
 
   Future<void> _changePhoto(Member member) async {
+    final supportsCamera =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.windows);
     final source = await showModalBottomSheet<ImageSource>(
       context: context,
       showDragHandle: true,
       builder: (context) => SafeArea(
         child: Wrap(
           children: [
-            if (!kIsWeb &&
-                defaultTargetPlatform != TargetPlatform.windows &&
-                defaultTargetPlatform != TargetPlatform.macOS &&
-                defaultTargetPlatform != TargetPlatform.linux)
+            if (supportsCamera)
               ListTile(
                 leading: const Icon(Icons.camera_alt_outlined),
                 title: const Text('Prendre une photo'),
@@ -108,17 +137,31 @@ class _MembersPageState extends ConsumerState<MembersPage> {
     );
     if (source == null || !mounted) return;
     try {
-      final image = await ImagePicker().pickImage(
-        source: source,
-        imageQuality: 85,
-        maxWidth: 1600,
-      );
-      if (image == null) return;
-      final extension = image.name.split('.').last.toLowerCase();
+      late final Uint8List imageBytes;
+      late final String extension;
+      if (source == ImageSource.camera) {
+        final captured = await showDialog<_MemberCameraImage>(
+          context: context,
+          builder: (_) => const _MemberCameraDialog(),
+        );
+        if (captured == null) return;
+        imageBytes = captured.bytes;
+        extension = captured.extension;
+      } else {
+        final image = await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 85,
+          maxWidth: 1600,
+        );
+        if (image == null) return;
+        imageBytes = await image.readAsBytes();
+        extension = image.name.split('.').last.toLowerCase();
+      }
+
       final service = ref.read(memberServiceProvider);
       final path = await service.uploadMemberPhoto(
         memberId: member.id,
-        bytes: await image.readAsBytes(),
+        bytes: imageBytes,
         extension: extension,
       );
       try {
@@ -127,12 +170,42 @@ class _MembersPageState extends ConsumerState<MembersPage> {
         await service.deleteMemberPhoto(path);
         rethrow;
       }
-      ref.invalidate(membersProvider);
+      ref.invalidate(membersForActivityProvider(widget.activityId));
       ref.invalidate(memberPhotoUrlProvider(member.photoUrl));
       ref.invalidate(memberPhotoUrlProvider(path));
       await service.deleteMemberPhoto(member.photoUrl);
     } catch (error) {
       if (mounted) _showError('Photo non enregistrée', error);
+    }
+  }
+
+  Future<void> _notifyMember(Member member) async {
+    final email = member.email?.trim();
+    if (email == null || email.isEmpty) return;
+    final reasons = <String>[
+      if (member.cardExpiringAt != null)
+        'Votre carte arrive à échéance le '
+            '${_dateLabel(member.cardExpiringAt!)}.',
+      if (member.cardHasLastClass)
+        'Il ne vous reste qu’un cours sur votre carte.',
+    ];
+    final uri = Uri(
+      scheme: 'mailto',
+      path: email,
+      queryParameters: {
+        'subject': 'Votre carte de cours',
+        'body':
+            'Bonjour ${member.firstName},\n\n${reasons.join('\n')}\n\n'
+            'N’hésitez pas à nous contacter pour la renouveler.\n\n'
+            'À bientôt !',
+      },
+    );
+    try {
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw StateError('Aucune application de messagerie disponible.');
+      }
+    } catch (error) {
+      if (mounted) _showError('Ouverture du courriel impossible', error);
     }
   }
 
@@ -166,7 +239,7 @@ class _MembersPageState extends ConsumerState<MembersPage> {
       await ref
           .read(memberServiceProvider)
           .setMemberActive(member.id, isActive);
-      ref.invalidate(membersProvider);
+      ref.invalidate(membersForActivityProvider(widget.activityId));
     } catch (error) {
       if (mounted) _showError('Archivage impossible', error);
     }
@@ -198,23 +271,54 @@ class _MembersPageState extends ConsumerState<MembersPage> {
 
   @override
   Widget build(BuildContext context) {
-    final members = ref.watch(membersProvider);
+    final members = ref.watch(membersForActivityProvider(widget.activityId));
     final userId = ref.watch(supabaseClientProvider).auth.currentUser?.id;
-    final isAdmin = userId != null &&
-        ref.watch(userProfileProvider(userId)).valueOrNull?.isAdmin == true;
+    final profile = userId == null
+        ? null
+        : ref.watch(userProfileProvider(userId)).valueOrNull;
+    final canManageMembers =
+        profile != null &&
+        {'admin', 'president', 'assistant'}.contains(profile.role);
+    final isAdmin = profile?.isAdmin == true;
     return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _editMember(),
-        icon: const Icon(Icons.person_add_alt_1),
-        label: const Text('Ajouter'),
-      ),
+      floatingActionButton: canManageMembers
+          ? FloatingActionButton.extended(
+              onPressed: () => _editMember(),
+              icon: const Icon(Icons.person_add_alt_1),
+              label: const Text('Ajouter'),
+            )
+          : null,
       body: members.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => _LoadError(
           error: error,
-          onRetry: () => ref.invalidate(membersProvider),
+          onRetry: () =>
+              ref.invalidate(membersForActivityProvider(widget.activityId)),
         ),
         data: (allMembers) {
+          final requestedMemberId = widget.initialMemberId;
+          if (requestedMemberId != null &&
+              _openedMemberId != requestedMemberId) {
+            _openedMemberId = requestedMemberId;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              final member = allMembers
+                  .where((item) => item.id == requestedMemberId)
+                  .firstOrNull;
+              if (member != null) {
+                _showMemberFile(member);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Cette fiche n’est pas disponible dans l’activité sélectionnée.',
+                    ),
+                  ),
+                );
+              }
+              widget.onInitialMemberOpened?.call();
+            });
+          }
           final query = _search.trim().toLowerCase();
           final visible = allMembers.where((member) {
             if (_activeOnly && !member.isActive) return false;
@@ -225,6 +329,23 @@ class _MembersPageState extends ConsumerState<MembersPage> {
           }).toList();
           return Column(
             children: [
+              if (visible.any(
+                (member) =>
+                    member.cardExpiringAt != null || member.cardHasLastClass,
+              ))
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                  child: Card(
+                    color: Theme.of(context).colorScheme.tertiaryContainer,
+                    child: ListTile(
+                      leading: const Icon(Icons.notifications_active_outlined),
+                      title: const Text('Cartes à surveiller'),
+                      subtitle: Text(
+                        '${visible.where((member) => member.cardExpiringAt != null || member.cardHasLastClass).length} adhérent(s) ont une carte qui expire bientôt ou approche de son dernier cours.',
+                      ),
+                    ),
+                  ),
+                ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
                 child: LayoutBuilder(
@@ -292,21 +413,37 @@ class _MembersPageState extends ConsumerState<MembersPage> {
                                   crossAxisCount: columns,
                                   crossAxisSpacing: 12,
                                   mainAxisSpacing: 12,
-                                  mainAxisExtent: 142,
+                                  mainAxisExtent: 190,
                                 ),
                             itemCount: visible.length,
                             itemBuilder: (context, index) => _MemberCard(
                               member: visible[index],
-                              onEdit: () => _editMember(visible[index]),
-                              onArchive: visible[index].isActive
+                              onEdit: canManageMembers
+                                  ? () => _editMember(visible[index])
+                                  : null,
+                              onArchive:
+                                  canManageMembers && visible[index].isActive
                                   ? () => _archive(visible[index])
                                   : null,
-                              onReactivate: visible[index].isActive
+                              onReactivate:
+                                  !canManageMembers || visible[index].isActive
                                   ? null
                                   : () => _reactivate(visible[index]),
-                              onChangePhoto: () => _changePhoto(visible[index]),
+                              onChangePhoto: canManageMembers
+                                  ? () => _changePhoto(visible[index])
+                                  : null,
                               onAdjustPasses: isAdmin
                                   ? () => _adjustPasses(visible[index])
+                                  : null,
+                              onNotify:
+                                  canManageMembers &&
+                                      (visible[index].email
+                                              ?.trim()
+                                              .isNotEmpty ??
+                                          false) &&
+                                      (visible[index].cardExpiringAt != null ||
+                                          visible[index].cardHasLastClass)
+                                  ? () => _notifyMember(visible[index])
                                   : null,
                             ),
                           );
@@ -319,6 +456,198 @@ class _MembersPageState extends ConsumerState<MembersPage> {
       ),
     );
   }
+
+  String? _openedMemberId;
+
+  Future<void> _showMemberFile(Member member) async {
+    final userId = ref.read(supabaseClientProvider).auth.currentUser?.id;
+    final profile = userId == null
+        ? null
+        : ref.read(userProfileProvider(userId)).valueOrNull;
+    final canManageMembers =
+        profile != null &&
+        {'admin', 'president', 'assistant'}.contains(profile.role);
+    if (canManageMembers) {
+      await _editMember(member);
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(member.fullName),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (member.email?.isNotEmpty ?? false)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.email_outlined),
+                title: Text(member.email!),
+              ),
+            if (member.phone?.isNotEmpty ?? false)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.phone_outlined),
+                title: Text(member.phone!),
+              ),
+            if (member.activityNames.isNotEmpty)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.fitness_center_outlined),
+                title: Text(member.activityNames.join(', ')),
+              ),
+            if (member.subscriptionUntil != null)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.event_outlined),
+                title: Text(
+                  'Forfait valable jusqu’au '
+                  '${_dateLabel(member.subscriptionUntil!)}',
+                ),
+              ),
+            if (member.remainingPasses > 0)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.confirmation_number_outlined),
+                title: Text('${member.remainingPasses} passage(s) restant(s)'),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Fermer'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+typedef _MemberCameraImage = ({Uint8List bytes, String extension});
+
+class _MemberCameraDialog extends StatefulWidget {
+  const _MemberCameraDialog();
+
+  @override
+  State<_MemberCameraDialog> createState() => _MemberCameraDialogState();
+}
+
+class _MemberCameraDialogState extends State<_MemberCameraDialog> {
+  late final Future<CameraController> _camera = _initializeCamera();
+  bool _capturing = false;
+  Object? _captureError;
+
+  Future<CameraController> _initializeCamera() async {
+    final cameras = await availableCameras();
+    if (cameras.isEmpty) {
+      throw StateError('Aucune caméra n’a été détectée sur cet appareil.');
+    }
+    final controller = CameraController(
+      cameras.first,
+      ResolutionPreset.medium,
+      enableAudio: false,
+    );
+    await controller.initialize();
+    return controller;
+  }
+
+  Future<void> _capture(CameraController controller) async {
+    setState(() {
+      _capturing = true;
+      _captureError = null;
+    });
+    try {
+      final image = await controller.takePicture();
+      final extension = image.name.split('.').last.toLowerCase();
+      final bytes = await image.readAsBytes();
+      if (!mounted) return;
+      Navigator.pop(context, (bytes: bytes, extension: extension));
+    } catch (error) {
+      if (mounted) setState(() => _captureError = error);
+    } finally {
+      if (mounted) setState(() => _capturing = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(
+      _camera.then<void>(
+        (controller) async => controller.dispose(),
+        onError: (Object error, StackTrace stackTrace) {},
+      ),
+    );
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Photo de l’adhérent'),
+    content: SizedBox(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 640),
+        child: FutureBuilder<CameraController>(
+          future: _camera,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return SelectableText(
+                'Impossible d’ouvrir la caméra : ${snapshot.error}',
+              );
+            }
+            if (!snapshot.hasData) {
+              return const SizedBox(
+                height: 300,
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            final controller = snapshot.data!;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AspectRatio(
+                  aspectRatio: controller.value.aspectRatio,
+                  child: CameraPreview(controller),
+                ),
+                if (_captureError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'La prise de vue a échoué : $_captureError',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: _capturing ? null : () => _capture(controller),
+                  icon: _capturing
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.camera_alt_rounded),
+                  label: Text(_capturing ? 'Capture…' : 'Prendre la photo'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(56),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Annuler'),
+      ),
+    ],
+  );
 }
 
 class _InstructorStrip extends ConsumerWidget {
@@ -425,14 +754,16 @@ class _MemberCard extends ConsumerWidget {
     required this.onReactivate,
     required this.onChangePhoto,
     required this.onAdjustPasses,
+    required this.onNotify,
   });
 
   final Member member;
-  final VoidCallback onEdit;
+  final VoidCallback? onEdit;
   final VoidCallback? onArchive;
   final VoidCallback? onReactivate;
-  final VoidCallback onChangePhoto;
+  final VoidCallback? onChangePhoto;
   final VoidCallback? onAdjustPasses;
+  final VoidCallback? onNotify;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -456,7 +787,9 @@ class _MemberCard extends ConsumerWidget {
                   customBorder: const CircleBorder(),
                   onTap: onChangePhoto,
                   child: Tooltip(
-                    message: 'Ajouter ou modifier la photo',
+                    message: onChangePhoto == null
+                        ? 'Photo'
+                        : 'Ajouter ou modifier la photo',
                     child: Stack(
                       clipBehavior: Clip.none,
                       children: [
@@ -478,15 +811,16 @@ class _MemberCard extends ConsumerWidget {
                             ),
                           ),
                         ),
-                        Positioned(
-                          right: -2,
-                          bottom: -2,
-                          child: CircleAvatar(
-                            radius: 10,
-                            backgroundColor: colors.secondary,
-                            child: const Icon(Icons.camera_alt, size: 12),
+                        if (onChangePhoto != null)
+                          Positioned(
+                            right: -2,
+                            bottom: -2,
+                            child: CircleAvatar(
+                              radius: 10,
+                              backgroundColor: colors.secondary,
+                              child: const Icon(Icons.camera_alt, size: 12),
+                            ),
                           ),
-                        ),
                       ],
                     ),
                   ),
@@ -512,9 +846,29 @@ class _MemberCard extends ConsumerWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
+                    if (member.activityNames.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Wrap(
+                          spacing: 4,
+                          runSpacing: -8,
+                          children: [
+                            for (final name in member.activityNames)
+                              Chip(
+                                visualDensity: VisualDensity.compact,
+                                label: Text(
+                                  name,
+                                  style: const TextStyle(fontSize: 10),
+                                ),
+                                padding: EdgeInsets.zero,
+                              ),
+                          ],
+                        ),
+                      ),
                     const SizedBox(height: 4),
                     Wrap(
                       spacing: 6,
+                      runSpacing: 2,
                       children: [
                         _StatusChip(
                           label: member.isActive ? 'Actif' : 'Archivé',
@@ -526,28 +880,74 @@ class _MemberCard extends ConsumerWidget {
                           label: member.membershipValidUntil == null
                               ? 'Cotisation à jour ?'
                               : current
-                              ? 'Cotisation OK'
+                              ? 'Cotisation · ${_daysRemainingLabel(member.membershipDaysRemaining!)}'
                               : 'Cotisation échue',
                           color: current ? colors.tertiary : colors.error,
                         ),
                         _StatusChip(
-                          label: '${member.remainingPasses} passage(s)',
-                          color: member.remainingPasses <= 1
+                          label: member.subscriptionUntil == null
+                              ? '${member.remainingPasses} passage(s)'
+                              : 'Forfait · ${_daysRemainingLabel(member.subscriptionDaysRemaining!)}'
+                                    ' (jusqu’au ${_dateLabel(member.subscriptionUntil!)})'
+                                    '${member.remainingPasses > 0 ? ' + ${member.remainingPasses} passage(s)' : ''}',
+                          color:
+                              member.subscriptionUntil == null &&
+                                  member.remainingPasses <= 1
                               ? colors.secondary
                               : colors.primary,
                         ),
                       ],
                     ),
+                    if (member.cardExpiringAt != null ||
+                        member.cardHasLastClass)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Wrap(
+                          spacing: 6,
+                          runSpacing: 2,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            if (member.cardExpiringAt != null)
+                              _StatusChip(
+                                label:
+                                    'Expire le ${_dateLabel(member.cardExpiringAt!)}',
+                                color: colors.error,
+                              ),
+                            if (member.cardHasLastClass)
+                              _StatusChip(
+                                label: 'Dernier cours',
+                                color: colors.secondary,
+                              ),
+                            if (onNotify != null)
+                              TextButton.icon(
+                                onPressed: onNotify,
+                                icon: const Icon(
+                                  Icons.email_outlined,
+                                  size: 16,
+                                ),
+                                label: const Text('Prévenir'),
+                                style: TextButton.styleFrom(
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                   ],
                 ),
               ),
               PopupMenuButton<String>(
                 itemBuilder: (context) => [
-                  const PopupMenuItem(value: 'edit', child: Text('Modifier')),
-                  const PopupMenuItem(
-                    value: 'photo',
-                    child: Text('Modifier la photo'),
-                  ),
+                  if (onEdit != null)
+                    const PopupMenuItem(value: 'edit', child: Text('Modifier')),
+                  if (onChangePhoto != null)
+                    const PopupMenuItem(
+                      value: 'photo',
+                      child: Text('Modifier la photo'),
+                    ),
                   if (onAdjustPasses != null)
                     const PopupMenuItem(
                       value: 'passes',
@@ -565,8 +965,8 @@ class _MemberCard extends ConsumerWidget {
                     ),
                 ],
                 onSelected: (value) {
-                  if (value == 'edit') onEdit();
-                  if (value == 'photo') onChangePhoto();
+                  if (value == 'edit') onEdit?.call();
+                  if (value == 'photo') onChangePhoto?.call();
                   if (value == 'passes') onAdjustPasses?.call();
                   if (value == 'archive') onArchive?.call();
                   if (value == 'reactivate') onReactivate?.call();
@@ -609,10 +1009,7 @@ class _PassAdjustment {
 }
 
 class _PassAdjustmentDialog extends StatefulWidget {
-  const _PassAdjustmentDialog({
-    required this.memberName,
-    required this.cards,
-  });
+  const _PassAdjustmentDialog({required this.memberName, required this.cards});
 
   final String memberName;
   final List<Map<String, dynamic>> cards;
@@ -705,7 +1102,8 @@ class _PassAdjustmentDialogState extends State<_PassAdjustmentDialog> {
           final remaining = int.tryParse(_remaining.text.trim());
           final reason = _reason.text.trim();
           setState(() {
-            _remainingError = remaining == null || remaining < 0 || remaining > 1000
+            _remainingError =
+                remaining == null || remaining < 0 || remaining > 1000
                 ? 'Saisir un nombre entre 0 et 1000.'
                 : null;
             _reasonError = reason.isEmpty
@@ -731,9 +1129,15 @@ class _PassAdjustmentDialogState extends State<_PassAdjustmentDialog> {
 }
 
 class _MemberFormDialog extends StatefulWidget {
-  const _MemberFormDialog({this.member});
+  const _MemberFormDialog({
+    required this.activities,
+    required this.initialActivityIds,
+    this.member,
+  });
 
   final Member? member;
+  final List<Activity> activities;
+  final List<String> initialActivityIds;
 
   @override
   State<_MemberFormDialog> createState() => _MemberFormDialogState();
@@ -752,6 +1156,7 @@ class _MemberFormDialogState extends State<_MemberFormDialog> {
   late DateTime? _membershipDate;
   late DateTime? _birthDate;
   late DateTime? _certificateDate;
+  final Set<String> _activityIds = {};
 
   @override
   void initState() {
@@ -774,6 +1179,7 @@ class _MemberFormDialogState extends State<_MemberFormDialog> {
     _membershipDate = member?.membershipValidUntil;
     _birthDate = member?.birthDate;
     _certificateDate = member?.medicalCertificateValidUntil;
+    _activityIds.addAll(widget.initialActivityIds);
   }
 
   @override
@@ -824,6 +1230,16 @@ class _MemberFormDialogState extends State<_MemberFormDialog> {
 
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
+    if (_activityIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sélectionnez au moins une activité pour cet adhérent.',
+          ),
+        ),
+      );
+      return;
+    }
     final old = widget.member;
     Navigator.pop(
       context,
@@ -843,6 +1259,7 @@ class _MemberFormDialogState extends State<_MemberFormDialog> {
         isActive: old?.isActive ?? true,
         photoUrl: old?.photoUrl,
         remainingPasses: old?.remainingPasses ?? 0,
+        activityIds: _activityIds.toList(growable: false),
       ),
     );
   }
@@ -860,6 +1277,34 @@ class _MemberFormDialogState extends State<_MemberFormDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Activités pratiquées *',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              if (widget.activities.isEmpty)
+                const Text('Aucune activité active n’est configurée.')
+              else
+                for (final activity in widget.activities)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _activityIds.contains(activity.id),
+                    secondary: Icon(
+                      activity.iconData,
+                      color: activity.accentColor,
+                    ),
+                    title: Text(activity.name),
+                    onChanged: (selected) => setState(() {
+                      if (selected == true) {
+                        _activityIds.add(activity.id);
+                      } else {
+                        _activityIds.remove(activity.id);
+                      }
+                    }),
+                  ),
+              const Divider(),
               if (widget.member case final member?) ...[
                 Card(
                   child: Padding(
@@ -1091,4 +1536,17 @@ Member _withPhoto(Member member, String photoUrl) => Member(
   notes: member.notes,
   isActive: member.isActive,
   remainingPasses: member.remainingPasses,
+  subscriptionUntil: member.subscriptionUntil,
+  cardExpiringAt: member.cardExpiringAt,
+  cardHasLastClass: member.cardHasLastClass,
 );
+
+String _dateLabel(DateTime date) =>
+    '${date.day.toString().padLeft(2, '0')}/'
+    '${date.month.toString().padLeft(2, '0')}/${date.year}';
+
+String _daysRemainingLabel(int days) => switch (days) {
+  0 => 'expire aujourd’hui',
+  1 => '1 jour restant',
+  _ => '$days jours restants',
+};

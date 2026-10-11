@@ -5,6 +5,7 @@ class ClassSession {
     required this.type,
     required this.startsAt,
     required this.status,
+    this.activityId,
     this.endsAt,
     this.location,
     this.capacity,
@@ -12,6 +13,10 @@ class ClassSession {
     this.equipmentChecklist = const [],
     this.attendanceCount = 0,
     this.instructors = const [],
+    this.recurringEventId,
+    this.occurrenceKey,
+    this.repeatsUntil,
+    this.recurrenceInterval = 1,
   });
 
   final String id;
@@ -20,14 +25,39 @@ class ClassSession {
   final DateTime startsAt;
   final DateTime? endsAt;
   final String status;
+  final String? activityId;
   final String? location;
   final int? capacity;
   final String? preparationNotes;
   final List<Map<String, dynamic>> equipmentChecklist;
   final int attendanceCount;
   final List<SessionInstructor> instructors;
+  final String? recurringEventId;
+  final DateTime? occurrenceKey;
+  final DateTime? repeatsUntil;
+  final int recurrenceInterval;
 
   bool get isEvent => type == 'event';
+
+  ClassSession copyWith({String? activityId}) => ClassSession(
+    id: id,
+    title: title,
+    type: type,
+    startsAt: startsAt,
+    endsAt: endsAt,
+    status: status,
+    activityId: activityId ?? this.activityId,
+    location: location,
+    capacity: capacity,
+    preparationNotes: preparationNotes,
+    equipmentChecklist: equipmentChecklist,
+    attendanceCount: attendanceCount,
+    instructors: instructors,
+    recurringEventId: recurringEventId,
+    occurrenceKey: occurrenceKey,
+    repeatsUntil: repeatsUntil,
+    recurrenceInterval: recurrenceInterval,
+  );
 
   factory ClassSession.fromMap(
     Map<String, dynamic> map, {
@@ -46,6 +76,7 @@ class ClassSession {
           ? null
           : DateTime.parse(map['ends_at'] as String),
       status: map['status'] as String? ?? 'scheduled',
+      activityId: map['activity_id'] as String?,
       location: map['location'] as String?,
       capacity: map['capacity'] as int?,
       preparationNotes: map['preparation_notes'] as String?,
@@ -55,21 +86,26 @@ class ClassSession {
           .whereType<Map<String, dynamic>>()
           .map(SessionInstructor.fromMap)
           .toList(growable: false),
+      recurringEventId: map['recurring_event_id'] as String?,
+      occurrenceKey: map['occurrence_key'] == null
+          ? null
+          : DateTime.parse(map['occurrence_key'] as String),
     );
   }
 
   Map<String, dynamic> toMap() => {
-        if (id.isNotEmpty) 'id': id,
-        'title': title.trim(),
-        'session_type': type,
-        'starts_at': startsAt.toUtc().toIso8601String(),
-        'ends_at': endsAt?.toUtc().toIso8601String(),
-        'status': status,
-        'location': _emptyToNull(location),
-        'capacity': capacity,
-        'preparation_notes': _emptyToNull(preparationNotes),
-        'equipment_checklist': equipmentChecklist,
-      };
+    if (id.isNotEmpty) 'id': id,
+    'title': title.trim(),
+    'session_type': type,
+    'starts_at': startsAt.toUtc().toIso8601String(),
+    'ends_at': endsAt?.toUtc().toIso8601String(),
+    'status': status,
+    if (activityId != null) 'activity_id': activityId,
+    'location': _emptyToNull(location),
+    'capacity': capacity,
+    'preparation_notes': _emptyToNull(preparationNotes),
+    'equipment_checklist': equipmentChecklist,
+  };
 }
 
 class SessionInstructor {
@@ -93,9 +129,9 @@ class SessionInstructor {
   }
 
   Map<String, dynamic> toAssignmentMap() => {
-        'profile_id': profileId,
-        'role': role,
-      };
+    'profile_id': profileId,
+    'role': role,
+  };
 }
 
 String? _emptyToNull(String? value) {

@@ -9,7 +9,9 @@ import '../application/room_mode_service.dart';
 import '../domain/session_plan.dart';
 
 class RoomPage extends ConsumerStatefulWidget {
-  const RoomPage({super.key});
+  const RoomPage({this.activityId, super.key});
+
+  final String? activityId;
 
   @override
   ConsumerState<RoomPage> createState() => _RoomPageState();
@@ -100,13 +102,13 @@ class _RoomPageState extends ConsumerState<RoomPage> {
 
   @override
   Widget build(BuildContext context) {
-    final sessions = ref.watch(sessionsProvider);
-    final tracks = ref.watch(tracksProvider);
+    final sessions = ref.watch(sessionsProvider(widget.activityId));
+    final tracks = ref.watch(tracksForActivityProvider(widget.activityId));
     return sessions.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, _) => _ErrorState(
         error: error,
-        onRetry: () => ref.invalidate(sessionsProvider),
+        onRetry: () => ref.invalidate(sessionsProvider(widget.activityId)),
       ),
       data: (allSessions) => tracks.when(
         loading: () => const Center(child: CircularProgressIndicator()),

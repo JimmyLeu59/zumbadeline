@@ -1,23 +1,8 @@
-enum DanceStyle {
-  salsa,
-  merengue,
-  reggaeton,
-  bachata,
-  cumbia,
-  other,
-}
+enum DanceStyle { salsa, merengue, reggaeton, bachata, cumbia, other }
 
-enum CardioIntensity {
-  warmUp,
-  moderate,
-  high,
-  coolDown,
-}
+enum CardioIntensity { warmUp, moderate, high, coolDown }
 
-enum ChoreographyDocumentType {
-  photo,
-  pdf,
-}
+enum ChoreographyDocumentType { photo, pdf }
 
 class Track {
   const Track({
@@ -32,6 +17,8 @@ class Track {
     this.teachingNotes,
     this.lastPlayedAt,
     this.spotifyUrl,
+    this.activityId,
+    this.localDocumentPath,
   });
 
   final String id;
@@ -45,16 +32,31 @@ class Track {
   final String? teachingNotes;
   final DateTime? lastPlayedAt;
   final String? spotifyUrl;
+  final String? activityId;
+  final String? localDocumentPath;
+
+  Track copyWith({String? activityId}) => Track(
+    id: id,
+    title: title,
+    artist: artist,
+    style: style,
+    duration: duration,
+    intensity: intensity,
+    documentUrl: documentUrl,
+    documentType: documentType,
+    teachingNotes: teachingNotes,
+    lastPlayedAt: lastPlayedAt,
+    spotifyUrl: spotifyUrl,
+    activityId: activityId ?? this.activityId,
+    localDocumentPath: localDocumentPath,
+  );
 
   factory Track.fromMap(Map<String, dynamic> map) {
     return Track(
       id: map['id'] as String,
       title: map['title'] as String,
       artist: map['artist'] as String? ?? '',
-      style: _enumByName(
-        DanceStyle.values,
-        map['style'] as String? ?? 'other',
-      ),
+      style: _enumByName(DanceStyle.values, map['style'] as String? ?? 'other'),
       duration: Duration(seconds: map['duration_seconds'] as int? ?? 0),
       intensity: _enumByName(
         CardioIntensity.values,
@@ -70,22 +72,25 @@ class Track {
           ? null
           : DateTime.parse(map['last_played_at'] as String),
       spotifyUrl: map['spotify_url'] as String?,
+      activityId: map['activity_id'] as String?,
+      localDocumentPath: map['local_document_path'] as String?,
     );
   }
 
   Map<String, dynamic> toMap() => {
-        if (id.isNotEmpty) 'id': id,
-        'title': title,
-        'artist': artist,
-        'style': style.name,
-        'duration_seconds': duration.inSeconds,
-        'intensity': intensity.name,
-        'document_url': documentUrl,
-        'document_type': documentType?.name,
-        'teaching_notes': teachingNotes,
-        'last_played_at': lastPlayedAt?.toIso8601String(),
-        'spotify_url': _emptyToNull(spotifyUrl),
-      };
+    if (id.isNotEmpty) 'id': id,
+    'title': title,
+    'artist': artist,
+    'style': style.name,
+    'duration_seconds': duration.inSeconds,
+    'intensity': intensity.name,
+    'document_url': documentUrl,
+    'document_type': documentType?.name,
+    'teaching_notes': teachingNotes,
+    'last_played_at': lastPlayedAt?.toIso8601String(),
+    'spotify_url': _emptyToNull(spotifyUrl),
+    if (activityId != null) 'activity_id': activityId,
+  };
 }
 
 String? _emptyToNull(String? value) {

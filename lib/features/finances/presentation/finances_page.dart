@@ -7,15 +7,21 @@ import '../../members/domain/member.dart';
 import '../domain/payment.dart';
 
 class FinancesPage extends ConsumerWidget {
-  const FinancesPage({super.key});
+  const FinancesPage({this.activityId, super.key});
+
+  final String? activityId;
 
   Future<void> _newPayment(BuildContext context, WidgetRef ref) async {
     late final List<Member> activeMembers;
     late final PricingSettings pricing;
+    late final List<SubscriptionPlan> plans;
     try {
-      final members = await ref.read(membersProvider.future);
+      final members = await ref.read(
+        membersForActivityProvider(activityId).future,
+      );
       activeMembers = members.where((member) => member.isActive).toList();
       pricing = await ref.read(pricingProvider.future);
+      plans = await ref.read(subscriptionPlansProvider.future);
     } catch (error) {
       if (context.mounted) _showError(context, error);
       return;
@@ -29,15 +35,37 @@ class FinancesPage extends ConsumerWidget {
     }
     final result = await showDialog<_PaymentRequest>(
       context: context,
-      builder: (_) => _PaymentDialog(members: activeMembers, pricing: pricing),
+      builder: (_) => _PaymentDialog(
+        members: activeMembers,
+        pricing: pricing,
+        plans: plans,
+      ),
     );
     if (result == null || !context.mounted) return;
     try {
       final service = ref.read(financeServiceProvider);
       if (result.type == 'class_card') {
-        await service.purchaseClassCard(
+        if (activityId == null) {
+          throw StateError(
+            'Sélectionnez une activité avant de vendre une carte.',
+          );
+        }
+        await service.purchaseActivityCard(
           memberId: result.member.id,
+          activityId: activityId!,
+          priceTier: result.priceTier!,
+          planCode: result.planCode,
           paymentMethod: result.method,
+          operationId: const Uuid().v4(),
+        );
+      } else if (activityId != null && result.type != 'membership') {
+        await service.recordActivityPayment(
+          memberId: result.member.id,
+          activityId: activityId!,
+          paymentType: result.type,
+          paymentMethod: result.method,
+          amount: result.amount!,
+          notes: result.notes,
           operationId: const Uuid().v4(),
         );
       } else {
@@ -50,8 +78,8 @@ class FinancesPage extends ConsumerWidget {
           operationId: const Uuid().v4(),
         );
       }
-      ref.invalidate(paymentsProvider);
-      ref.invalidate(membersProvider);
+      ref.invalidate(paymentsProvider(activityId));
+      ref.invalidate(membersForActivityProvider(activityId));
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
@@ -68,7 +96,9 @@ class FinancesPage extends ConsumerWidget {
     required bool excel,
   }) async {
     try {
-      final payments = await ref.read(financeServiceProvider).listAllPayments();
+      final payments = await ref
+          .read(financeServiceProvider)
+          .listAllPayments(activityId: activityId);
       final reports = ref.read(reportServiceProvider);
       if (excel) {
         await reports.shareFinanceExcel(payments);
@@ -82,7 +112,9 @@ class FinancesPage extends ConsumerWidget {
 
   Future<void> _createMemberInvoice(BuildContext context, WidgetRef ref) async {
     try {
-      final members = await ref.read(membersProvider.future);
+      final members = await ref.read(
+        membersForActivityProvider(activityId).future,
+      );
       if (!context.mounted) return;
       if (members.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -101,6 +133,7 @@ class FinancesPage extends ConsumerWidget {
             memberId: request.member.id,
             from: request.period.start,
             through: request.period.end,
+            activityId: activityId,
           );
       if (!context.mounted) return;
       if (payments.isEmpty) {
@@ -137,11 +170,11 @@ class FinancesPage extends ConsumerWidget {
         content: Text(
           isCardPurchase
               ? 'Le paiement de ${_money(payment.amount)} associé à '
-                  '${payment.memberName} sera supprimé. La carte liée sera '
-                  'également supprimée uniquement si aucun passage n’a été '
-                  'utilisé; sinon l’opération sera refusée.'
+                    '${payment.memberName} sera supprimé. La carte liée sera '
+                    'également supprimée uniquement si aucun passage n’a été '
+                    'utilisé; sinon l’opération sera refusée.'
               : 'Le paiement de ${_money(payment.amount)} enregistré pour '
-                  '${payment.memberName} sera définitivement supprimé.',
+                    '${payment.memberName} sera définitivement supprimé.',
         ),
         actions: [
           TextButton(
@@ -161,12 +194,11 @@ class FinancesPage extends ConsumerWidget {
     if (confirmed != true || !context.mounted) return;
     try {
       await ref.read(financeServiceProvider).deletePayment(payment.id);
-      ref.invalidate(paymentsProvider);
-      ref.invalidate(membersProvider);
+      ref.invalidate(paymentsProvider(activityId));
+      ref.invalidate(membersForActivityProvider(activityId));
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Paiement supprimé.')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Paiement supprimé.')));
       }
     } catch (error) {
       if (context.mounted) _showError(context, error);
@@ -175,11 +207,17 @@ class FinancesPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final payments = ref.watch(paymentsProvider);
+    final payments = ref.watch(paymentsProvider(activityId));
     final pricing = ref.watch(pricingProvider);
+    final plans = ref.watch(subscriptionPlansProvider);
     final userId = ref.watch(supabaseClientProvider).auth.currentUser?.id;
-    final isAdmin = userId != null &&
-        ref.watch(userProfileProvider(userId)).valueOrNull?.isAdmin == true;
+    final canManageFinance =
+        userId != null &&
+        ref
+                .watch(userProfileProvider(userId))
+                .valueOrNull
+                ?.canViewGlobalFinances ==
+            true;
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _newPayment(context, ref),
@@ -223,6 +261,51 @@ class FinancesPage extends ConsumerWidget {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: plans.when(
+              loading: () => const LinearProgressIndicator(),
+              error: (error, _) => Card(
+                child: ListTile(
+                  leading: const Icon(Icons.error_outline),
+                  title: const Text('Forfaits indisponibles'),
+                  subtitle: Text(error.toString()),
+                  trailing: IconButton(
+                    onPressed: () => ref.invalidate(subscriptionPlansProvider),
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ),
+              ),
+              data: (items) => items.isEmpty
+                  ? const SizedBox.shrink()
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Forfaits disponibles',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 6),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              for (final plan in items)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: _PriceChip(
+                                    label:
+                                        '${plan.label} (${plan.validityLabel})',
+                                    amount: plan.price,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Align(
               alignment: Alignment.centerLeft,
               child: Wrap(
@@ -253,7 +336,7 @@ class FinancesPage extends ConsumerWidget {
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (error, _) => _FinanceError(
                 error: error,
-                onRetry: () => ref.invalidate(paymentsProvider),
+                onRetry: () => ref.invalidate(paymentsProvider(activityId)),
               ),
               data: (rows) {
                 if (rows.isEmpty) {
@@ -303,11 +386,11 @@ class FinancesPage extends ConsumerWidget {
                                 children: [
                                   Text(
                                     _money(payment.amount),
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleMedium,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium,
                                   ),
-                                  if (isAdmin)
+                                  if (canManageFinance)
                                     PopupMenuButton<String>(
                                       tooltip: 'Actions paiement',
                                       onSelected: (value) {
@@ -347,6 +430,8 @@ class _PaymentRequest {
     required this.method,
     this.amount,
     this.notes,
+    this.priceTier,
+    this.planCode,
   });
 
   final Member member;
@@ -354,6 +439,8 @@ class _PaymentRequest {
   final String method;
   final double? amount;
   final String? notes;
+  final String? priceTier;
+  final String? planCode;
 }
 
 class _InvoiceRequest {
@@ -449,9 +536,14 @@ class _InvoiceDialogState extends State<_InvoiceDialog> {
 }
 
 class _PaymentDialog extends StatefulWidget {
-  const _PaymentDialog({required this.members, required this.pricing});
+  const _PaymentDialog({
+    required this.members,
+    required this.pricing,
+    required this.plans,
+  });
   final List<Member> members;
   final PricingSettings pricing;
+  final List<SubscriptionPlan> plans;
 
   @override
   State<_PaymentDialog> createState() => _PaymentDialogState();
@@ -461,6 +553,7 @@ class _PaymentDialogState extends State<_PaymentDialog> {
   late Member _member = widget.members.first;
   String _type = 'class_card';
   String _method = 'cash';
+  String _offer = 'standard';
   final _amount = TextEditingController();
   final _notes = TextEditingController();
   String? _amountError;
@@ -562,14 +655,49 @@ class _PaymentDialogState extends State<_PaymentDialog> {
               controller: _notes,
               decoration: const InputDecoration(labelText: 'Note (facultatif)'),
             ),
-            if (_type == 'class_card')
+            if (_type == 'class_card') ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _offer,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Formule'),
+                items: [
+                  DropdownMenuItem(
+                    value: 'standard',
+                    child: Text(
+                      '${widget.pricing.cardPassCount} cours, sans limite de '
+                      'date · ${_money(widget.pricing.firstCardPrice)}',
+                    ),
+                  ),
+                  DropdownMenuItem(
+                    value: 'loyalty',
+                    child: Text(
+                      '${widget.pricing.cardPassCount} cours, tarif fidélité · '
+                      '${_money(widget.pricing.renewalCardPrice)}',
+                    ),
+                  ),
+                  for (final plan in widget.plans)
+                    DropdownMenuItem(
+                      value: plan.code,
+                      child: Text(
+                        '${plan.label} (${plan.validityLabel}) · '
+                        '${_money(plan.price)}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => _offer = value);
+                },
+              ),
               const Padding(
-                padding: EdgeInsets.only(top: 10),
+                padding: EdgeInsets.only(top: 8),
                 child: Text(
-                  'Le tarif et le nombre de passages seront calculés selon '
-                  'les paramètres actuels.',
+                  'Les forfaits sont valables 30 jours (mensuel) ou 3 mois '
+                  '(trimestriel) à partir de la vente.',
                 ),
               ),
+            ],
           ],
         ),
       ),
@@ -605,6 +733,10 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                 type: _type,
                 method: _method,
                 notes: _notes.text,
+                priceTier: _offer == 'loyalty' ? 'loyalty' : 'standard',
+                planCode: _offer == 'standard' || _offer == 'loyalty'
+                    ? null
+                    : _offer,
               ),
             );
           }

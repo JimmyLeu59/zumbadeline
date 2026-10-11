@@ -52,7 +52,9 @@ on conflict (id) do update set role = 'admin';
 
 Les rôles sont attribués côté base, jamais depuis les métadonnées fournies par le client. Seules les administratrices peuvent modifier les rôles. Les comptes assistants doivent être invités par une administratrice.
 
-Tarifs initiaux insérés : adhésion 20 €, cours à l'unité 5 €, première carte 50 €, renouvellement 45 €, 10 passages. Les valeurs sont modifiables dans `pricing_settings`.
+Tarifs initiaux insérés : adhésion 20 €, cours à l'unité 5 €, première carte 50 €, renouvellement 45 €, 10 passages (sans date limite). Les valeurs sont modifiables dans `pricing_settings`.
+
+Forfaits (migration `202610040017_subscription_plans.sql`, table `subscription_plans`, prix modifiables dans Réglages) : mensuel valable 30 jours — 1 cours/semaine 20 €, 2 : 35 €, 3 : 48 €, 4 : 57 € ; trimestriel valable 3 mois — 1 cours/semaine 53 €, 2 : 95 €, 3 : 128 €, 4 : 154 €. Le pointage refuse un forfait expiré (selon la date de la séance) ou dont la limite hebdomadaire (semaine civile, fuseau Europe/Paris) est atteinte. Hors-ligne, seule l'expiration est contrôlée localement ; la limite hebdomadaire est vérifiée à la synchronisation.
 
 ## Thème
 
@@ -61,7 +63,7 @@ Tarifs initiaux insérés : adhésion 20 €, cours à l'unité 5 €, première
 ## Fonctionnalités implémentées
 
 - Connexion et réinitialisation de mot de passe Supabase; accès au menu conditionné au profil et au rôle. Le logo fourni apparaît sur l'écran de connexion, dans l'en-tête et comme icône de l'application.
-- Adhérents : recherche, création, modification, archivage/réactivation, cotisation, contact d'urgence, certificat, notes et photo caméra/galerie privée. L'avatar du trombinoscope permet d'ajouter/modifier la photo; la fiche affiche également le cumul des cours restants sur les cartes non épuisées.
+- Adhérents : recherche, création, modification, archivage/réactivation, cotisation, contact d'urgence, certificat, notes et photo caméra/galerie privée. L'avatar du trombinoscope permet d'ajouter/modifier la photo; la fiche affiche également le cumul des cours restants sur les cartes non épuisées et les jours restants avant l'échéance de la cotisation annuelle et des forfaits datés.
 - Équipe pédagogique : l'administratrice renseigne le nom affiché, plusieurs disciplines et une photo caméra/galerie pour chaque compte; les portraits et disciplines apparaissent au-dessus du trombinoscope adhérents.
 - Chorégraphies : CRUD, filtres style/intensité/titres oubliés, notes, pièces jointes PDF/image privées et ouverture de Spotify sur le morceau associé ou une recherche par titre/artiste. Cette intégration ouvre Spotify ou son lecteur Web; elle ne pilote pas la lecture depuis l'application.
 - Agenda : création cours/stages, modification des événements programmés, affectation de plusieurs instructeurs avec un rôle propre à chacun, liste d'émargement PDF, pointage, inscriptions extérieures et check-list matériel.
@@ -97,3 +99,7 @@ flutter test
 ```
 
 Sur Windows, Flutter peut demander d'activer le **Mode développeur Windows** pour créer les liens symboliques requis par les plugins. `flutter run` requiert en outre un appareil ou un émulateur connecté. Pour les téléphones, ouvrez le projet sur iOS/Android après `flutter pub get`; les descriptions d'accès à la caméra/photothèque iOS sont dans `ios/Runner/Info.plist`.
+
+## Notifications de cartes
+
+La migration `202610040018_card_notifications.sql` crée chaque jour dans Supabase des notifications pour les cartes expirant sous 7 jours ou avec un seul cours restant. L'application les reçoit en temps réel via Supabase Realtime lorsque le personnel est connecté et affiche un compteur, un rappel et une liste consultable. Un clic sur le message ouvre la fiche de l'adhérent et marque la notification comme lue; l'icône e-mail prépare un message prérempli vers l'adresse de l'adhérent. Elle dépend du schéma des migrations `202610040014` à `202610040017`; exécutez les migrations manquantes dans l'ordre, puis la migration `202610040018` dans le SQL Editor Supabase. Si le schéma a été initialisé manuellement, vérifiez l'historique avant d'utiliser `supabase db push`, qui pourrait tenter de rejouer les anciennes migrations. Ce sont des notifications dans l'application : aucun service externe n'est utilisé et aucune notification système n'est envoyée quand l'application est fermée.

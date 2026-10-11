@@ -13,9 +13,13 @@ class SessionService {
     DateTime? from,
     DateTime? until,
     bool upcomingOnly = false,
+    String? activityId,
   }) async {
+    final cacheKey = activityId == null
+        ? 'sessions_cache'
+        : 'sessions_cache:$activityId';
     if (!await _offlineStore.isOnline()) {
-      final cached = _offlineStore.readJsonList('sessions_cache');
+      final cached = _offlineStore.readJsonList(cacheKey);
       if (cached == null) {
         throw StateError('Aucun agenda n’est disponible hors-ligne.');
       }
@@ -36,6 +40,9 @@ class SessionService {
           .toList(growable: false);
     }
     var query = _client.from('sessions').select();
+    if (activityId != null) {
+      query = query.eq('activity_id', activityId);
+    }
     final start = from ?? (upcomingOnly ? DateTime.now() : null);
     if (start != null) {
       query = query.gte('starts_at', start.toUtc().toIso8601String());
@@ -45,7 +52,7 @@ class SessionService {
     }
     final rows = await query.order('starts_at');
     if (rows.isEmpty) {
-      await _offlineStore.cacheJson('sessions_cache', rows);
+      await _offlineStore.cacheJson(cacheKey, rows);
       return const [];
     }
     final assignments = await _client
@@ -66,13 +73,43 @@ class SessionService {
           },
         )
         .toList(growable: false);
-    await _offlineStore.cacheJson('sessions_cache', enrichedRows);
+    await _offlineStore.cacheJson(cacheKey, enrichedRows);
     return enrichedRows
         .map((row) => ClassSession.fromMap(row))
         .toList(growable: false);
   }
 
   Future<ClassSession> saveSession(ClassSession session) async {
+    if (session.id.isEmpty && session.repeatsUntil != null) {
+      final response = await _client.rpc(
+        'create_recurring_event',
+        params: {
+          'p_session': session.toMap(),
+          'p_repeats_until': session.repeatsUntil!
+              .toIso8601String()
+              .split('T')
+              .first,
+          'p_interval_weeks': session.recurrenceInterval,
+          'p_time_zone': 'Europe/Paris',
+          'p_assignments': session.instructors
+              .map((instructor) => instructor.toAssignmentMap())
+              .toList(),
+        },
+      );
+      if (response is! String) {
+        throw const FormatException(
+          'La création de la série récurrente a retourné une réponse invalide.',
+        );
+      }
+      final row = await _client
+          .from('sessions')
+          .select()
+          .eq('recurring_event_id', response)
+          .order('starts_at')
+          .limit(1)
+          .single();
+      return ClassSession.fromMap(row);
+    }
     if (session.isEvent) {
       final response = await _client.rpc(
         'save_event_with_instructors',
@@ -117,9 +154,16 @@ class SessionService {
   }
 
   Future<void> deleteEvent(String eventId) async {
+    await _client.rpc('delete_event', params: {'p_event_id': eventId});
+  }
+
+  Future<void> deleteRecurringOccurrence(
+    String sessionId, {
+    required bool deleteSeries,
+  }) async {
     await _client.rpc(
-      'delete_event',
-      params: {'p_event_id': eventId},
+      'delete_recurring_occurrence',
+      params: {'p_session_id': sessionId, 'p_delete_series': deleteSeries},
     );
   }
 
@@ -242,6 +286,33 @@ class SessionService {
     } else {
       await _offlineStore.enqueueCheckIn(operation);
     }
+  }
+
+  Future<Map<String, dynamic>> purchaseCardAndCheckIn({
+    required String sessionId,
+    required String memberId,
+    required String priceTier,
+    required String paymentMethod,
+    required String operationId,
+    String? planCode,
+  }) async {
+    final response = await _client.rpc(
+      'purchase_activity_card_and_check_in',
+      params: {
+        'p_session_id': sessionId,
+        'p_member_id': memberId,
+        'p_price_tier': priceTier,
+        'p_payment_method': paymentMethod,
+        'p_offline_operation_id': operationId,
+        'p_plan_code': planCode,
+      },
+    );
+    if (response is! Map) {
+      throw const FormatException(
+        'Réponse invalide lors du pointage avec vente de carte.',
+      );
+    }
+    return Map<String, dynamic>.from(response);
   }
 }
 

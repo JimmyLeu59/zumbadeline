@@ -5,6 +5,13 @@ import '../core/supabase/supabase_providers.dart';
 import '../features/auth/presentation/auth_gate.dart';
 import 'theme/zumba_theme.dart';
 
+const _backgroundAssets = {
+  '00000000-0000-0000-0000-000000000002':
+      'assets/images/chant_background.jpg',
+  '00000000-0000-0000-0000-000000000003':
+      'assets/images/line_dance_background.jpg',
+};
+
 class ZumbaApp extends ConsumerStatefulWidget {
   const ZumbaApp({super.key});
 
@@ -38,9 +45,13 @@ class _ZumbaAppState extends ConsumerState<ZumbaApp> {
       builder: (context, child) => Stack(
         fit: StackFit.expand,
         children: [
-          const Image(
-            image: AssetImage('assets/images/zumba_background.png'),
+          Image(
+            image: AssetImage(
+              _backgroundAssets[ref.watch(activitySelectionProvider)] ??
+                  'assets/images/zumba_background.png',
+            ),
             fit: BoxFit.cover,
+            gaplessPlayback: true,
           ),
           ColoredBox(
             color: Theme.of(context).brightness == Brightness.dark

@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/supabase/supabase_providers.dart';
+import '../../activities/domain/activity.dart';
 import '../../staff/domain/app_user_profile.dart';
 import '../data/session_service.dart';
 import '../domain/class_session.dart';
 
 class AgendaPage extends ConsumerStatefulWidget {
-  const AgendaPage({super.key, this.onOpenAttendance});
+  const AgendaPage({super.key, this.activityId, this.onOpenAttendance});
 
+  final String? activityId;
   final ValueChanged<ClassSession>? onOpenAttendance;
 
   @override
@@ -17,17 +19,25 @@ class AgendaPage extends ConsumerStatefulWidget {
 
 class _AgendaPageState extends ConsumerState<AgendaPage> {
   Future<void> _addSession() async {
+    final activities = await _loadActivities();
+    if (activities == null || !mounted) return;
     final staff = await _loadStaffProfiles();
     if (staff == null || !mounted) return;
     final session = await showDialog<ClassSession>(
       context: context,
-      builder: (_) => _SessionFormDialog(instructors: staff),
+      builder: (_) => _SessionFormDialog(
+        instructors: staff,
+        activities: activities,
+        defaultActivityId: widget.activityId,
+      ),
     );
     if (session == null || !mounted) return;
     await _saveSession(session);
   }
 
   Future<void> _editSession(ClassSession existing) async {
+    final activities = await _loadActivities();
+    if (activities == null || !mounted) return;
     final staff = await _loadStaffProfiles();
     if (staff == null || !mounted) return;
     final session = await showDialog<ClassSession>(
@@ -35,10 +45,21 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
       builder: (_) => _SessionFormDialog(
         session: existing,
         instructors: staff,
+        activities: activities,
+        defaultActivityId: existing.activityId,
       ),
     );
     if (session == null) return;
     await _saveSession(session);
+  }
+
+  Future<List<Activity>?> _loadActivities() async {
+    try {
+      return await ref.read(activitiesProvider.future);
+    } catch (error) {
+      if (mounted) _showError(error);
+      return null;
+    }
   }
 
   Future<List<AppUserProfile>?> _loadStaffProfiles() async {
@@ -52,13 +73,15 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
 
   Future<void> _saveSession(ClassSession session) async {
     try {
-      await ref.read(sessionServiceProvider).saveSession(session);
+      final saved = await ref.read(sessionServiceProvider).saveSession(session);
       ref.invalidate(sessionsProvider);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              session.id.isEmpty
+              session.repeatsUntil != null
+                  ? 'Série récurrente créée (${session.recurrenceInterval == 1 ? 'chaque semaine' : 'toutes les ${session.recurrenceInterval} semaines'}).'
+                  : saved.id.isEmpty
                   ? 'Séance planifiée.'
                   : 'Événement mis à jour.',
             ),
@@ -91,44 +114,90 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
     if (confirmed != true) return;
     try {
       await ref.read(sessionServiceProvider).cancelSession(session.id);
-      ref.invalidate(sessionsProvider);
+      ref.invalidate(sessionsProvider(widget.activityId));
     } catch (error) {
       if (mounted) _showError(error);
     }
   }
 
   Future<void> _deleteEvent(ClassSession session) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Supprimer définitivement cet événement ?'),
-        content: Text(
-          '« ${session.title} » et ses inscriptions extérieures, présences '
-          'et playlists associées seront supprimées. Cette action est '
-          'irréversible.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Retour'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
+    final deleteSeries = session.recurringEventId == null
+        ? null
+        : await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Supprimer une récurrence'),
+              content: Text(
+                '« ${session.title} » fait partie d’une série. '
+                'Souhaitez-vous supprimer uniquement cette occurrence ou '
+                'toute la série à venir ?',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Retour'),
+                ),
+                OutlinedButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cette occurrence'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                  child: const Text('Toute la série'),
+                ),
+              ],
             ),
-            child: const Text('Supprimer'),
-          ),
-        ],
-      ),
-    );
+          );
+    if (!mounted) return;
+    if (session.recurringEventId != null && deleteSeries == null) return;
+    final confirmed = session.recurringEventId != null
+        ? true
+        : await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Supprimer définitivement cette séance ?'),
+              content: Text(
+                '« ${session.title} » et ses présences, inscriptions '
+                'extérieures et playlists associées seront supprimées. '
+                'Cette action est irréversible.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Retour'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                  child: const Text('Supprimer'),
+                ),
+              ],
+            ),
+          );
     if (confirmed != true || !mounted) return;
     try {
-      await ref.read(sessionServiceProvider).deleteEvent(session.id);
+      if (session.recurringEventId != null) {
+        await ref
+            .read(sessionServiceProvider)
+            .deleteRecurringOccurrence(session.id, deleteSeries: deleteSeries!);
+      } else {
+        await ref.read(sessionServiceProvider).deleteEvent(session.id);
+      }
       ref.invalidate(sessionsProvider);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Événement supprimé.')),
+          SnackBar(
+            content: Text(
+              session.recurringEventId != null && deleteSeries == true
+                  ? 'Série et séances à venir supprimées de l’agenda.'
+                  : 'Événement supprimé de l’agenda.',
+            ),
+          ),
         );
       }
     } catch (error) {
@@ -164,10 +233,7 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
 
   @override
   Widget build(BuildContext context) {
-    final sessions = ref.watch(sessionsProvider);
-    final userId = ref.watch(supabaseClientProvider).auth.currentUser?.id;
-    final isAdmin = userId != null &&
-        ref.watch(userProfileProvider(userId)).valueOrNull?.isAdmin == true;
+    final sessions = ref.watch(sessionsProvider(widget.activityId));
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _addSession,
@@ -178,7 +244,7 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => _AgendaError(
           error: error,
-          onRetry: () => ref.invalidate(sessionsProvider),
+          onRetry: () => ref.invalidate(sessionsProvider(widget.activityId)),
         ),
         data: (items) {
           if (items.isEmpty) {
@@ -245,39 +311,35 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
                             child: const Icon(Icons.checklist_rounded),
                           ),
                         ),
-                      if (session.status == 'scheduled' ||
-                          (session.isEvent && isAdmin))
-                        PopupMenuButton<String>(
-                          onSelected: (value) {
-                            if (value == 'edit') _editSession(session);
-                            if (value == 'cancel') _cancelSession(session);
-                            if (value == 'complete') _markCompleted(session);
-                            if (value == 'delete') _deleteEvent(session);
-                          },
-                          itemBuilder: (_) => [
-                            if (session.isEvent &&
-                                session.status == 'scheduled')
-                              const PopupMenuItem(
-                                value: 'edit',
-                                child: Text('Modifier l’événement'),
-                              ),
-                            if (session.status == 'scheduled') ...[
-                              const PopupMenuItem(
-                                value: 'complete',
-                                child: Text('Marquer terminé'),
-                              ),
-                              const PopupMenuItem(
-                                value: 'cancel',
-                                child: Text('Annuler'),
-                              ),
-                            ],
-                            if (session.isEvent && isAdmin)
-                              const PopupMenuItem(
-                                value: 'delete',
-                                child: Text('Supprimer définitivement (admin)'),
-                              ),
+                      PopupMenuButton<String>(
+                        onSelected: (value) {
+                          if (value == 'edit') _editSession(session);
+                          if (value == 'cancel') _cancelSession(session);
+                          if (value == 'complete') _markCompleted(session);
+                          if (value == 'delete') _deleteEvent(session);
+                        },
+                        itemBuilder: (_) => [
+                          if (session.isEvent && session.status == 'scheduled')
+                            const PopupMenuItem(
+                              value: 'edit',
+                              child: Text('Modifier l’événement'),
+                            ),
+                          if (session.status == 'scheduled') ...[
+                            const PopupMenuItem(
+                              value: 'complete',
+                              child: Text('Marquer terminé'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'cancel',
+                              child: Text('Annuler'),
+                            ),
                           ],
-                        ),
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Text('Supprimer de l’agenda'),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -300,7 +362,7 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
       await ref
           .read(sessionServiceProvider)
           .updateEquipmentChecklist(session.id, checklist);
-      ref.invalidate(sessionsProvider);
+      ref.invalidate(sessionsProvider(widget.activityId));
     } catch (error) {
       if (mounted) _showError(error);
     }
@@ -318,6 +380,7 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
               startsAt: session.startsAt,
               endsAt: session.endsAt,
               status: 'completed',
+              activityId: session.activityId,
               location: session.location,
               capacity: session.capacity,
               preparationNotes: session.preparationNotes,
@@ -325,7 +388,7 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
               instructors: session.instructors,
             ),
           );
-      ref.invalidate(sessionsProvider);
+      ref.invalidate(sessionsProvider(widget.activityId));
     } catch (error) {
       if (mounted) _showError(error);
     }
@@ -333,10 +396,17 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
 }
 
 class _SessionFormDialog extends StatefulWidget {
-  const _SessionFormDialog({required this.instructors, this.session});
+  const _SessionFormDialog({
+    required this.instructors,
+    required this.activities,
+    required this.defaultActivityId,
+    this.session,
+  });
 
   final ClassSession? session;
   final List<AppUserProfile> instructors;
+  final List<Activity> activities;
+  final String? defaultActivityId;
 
   @override
   State<_SessionFormDialog> createState() => _SessionFormDialogState();
@@ -351,6 +421,10 @@ class _SessionFormDialogState extends State<_SessionFormDialog> {
   late DateTime _startsAt;
   late TimeOfDay _startTime;
   late bool _isEvent;
+  late String? _activityId;
+  late bool _repeatWeekly;
+  late DateTime _repeatsUntil;
+  int _recurrenceInterval = 1;
   final Set<String> _equipment = {'Enceinte', 'Micro', 'Caisse'};
   final Map<String, String> _instructorRoles = {};
 
@@ -370,6 +444,15 @@ class _SessionFormDialogState extends State<_SessionFormDialog> {
     _startsAt = DateTime(startsAt.year, startsAt.month, startsAt.day);
     _startTime = TimeOfDay.fromDateTime(startsAt);
     _isEvent = session?.isEvent ?? false;
+    _activityId =
+        session?.activityId ??
+        widget.defaultActivityId ??
+        (widget.activities.length == 1 ? widget.activities.first.id : null);
+    _repeatWeekly = false;
+    _repeatsUntil = DateTime(startsAt.year, 6, 30);
+    if (_repeatsUntil.isBefore(_startsAt)) {
+      _repeatsUntil = DateTime(_startsAt.year + 1, 6, 30);
+    }
     for (final instructor in session?.instructors ?? const []) {
       _instructorRoles[instructor.profileId] = instructor.role;
     }
@@ -407,8 +490,30 @@ class _SessionFormDialogState extends State<_SessionFormDialog> {
     if (time != null) setState(() => _startTime = time);
   }
 
+  Future<void> _pickRepeatsUntil() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _repeatsUntil.isBefore(_startsAt)
+          ? _startsAt
+          : _repeatsUntil,
+      firstDate: _startsAt,
+      lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
+    );
+    if (date != null) setState(() => _repeatsUntil = date);
+  }
+
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
+    if (_repeatWeekly && _repeatsUntil.isBefore(_startsAt)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'La date de fin doit être postérieure ou égale à la première séance.',
+          ),
+        ),
+      );
+      return;
+    }
     final previousChecklist = {
       for (final item in widget.session?.equipmentChecklist ?? const [])
         if (item['label'] is String) item['label'] as String: item['checked'],
@@ -429,6 +534,7 @@ class _SessionFormDialogState extends State<_SessionFormDialog> {
         id: widget.session?.id ?? '',
         title: _title.text,
         type: _isEvent ? 'event' : 'class',
+        activityId: _activityId,
         startsAt: start,
         endsAt: start.add(originalDuration ?? const Duration(hours: 1)),
         status: widget.session?.status ?? 'scheduled',
@@ -450,6 +556,8 @@ class _SessionFormDialogState extends State<_SessionFormDialog> {
                     ),
               ]
             : const [],
+        repeatsUntil: _repeatWeekly ? _repeatsUntil : null,
+        recurrenceInterval: _recurrenceInterval,
       ),
     );
   }
@@ -475,6 +583,21 @@ class _SessionFormDialogState extends State<_SessionFormDialog> {
                     : null,
               ),
               const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _activityId,
+                decoration: const InputDecoration(labelText: 'Activité *'),
+                items: [
+                  for (final activity in widget.activities)
+                    DropdownMenuItem(
+                      value: activity.id,
+                      child: Text(activity.name),
+                    ),
+                ],
+                onChanged: (value) => setState(() => _activityId = value),
+                validator: (value) =>
+                    value == null ? 'Choisissez une activité.' : null,
+              ),
+              const SizedBox(height: 12),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Événement / stage'),
@@ -483,6 +606,44 @@ class _SessionFormDialogState extends State<_SessionFormDialog> {
                     ? (value) => setState(() => _isEvent = value)
                     : null,
               ),
+              if (widget.session == null) ...[
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Répéter chaque semaine'),
+                  value: _repeatWeekly,
+                  onChanged: (value) => setState(() => _repeatWeekly = value),
+                ),
+                if (_repeatWeekly) ...[
+                  DropdownButtonFormField<int>(
+                    initialValue: _recurrenceInterval,
+                    decoration: const InputDecoration(labelText: 'Fréquence'),
+                    items: [
+                      for (var weeks = 1; weeks <= 4; weeks++)
+                        DropdownMenuItem(
+                          value: weeks,
+                          child: Text(
+                            weeks == 1
+                                ? 'Chaque semaine'
+                                : 'Toutes les $weeks semaines',
+                          ),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _recurrenceInterval = value);
+                      }
+                    },
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: _pickRepeatsUntil,
+                      icon: const Icon(Icons.event_repeat),
+                      label: Text('Jusqu’au ${_dateLabel(_repeatsUntil)}'),
+                    ),
+                  ),
+                ],
+              ],
               if (_isEvent) ...[
                 const SizedBox(height: 8),
                 Align(
@@ -533,7 +694,8 @@ class _SessionFormDialogState extends State<_SessionFormDialog> {
                               initialValue: _instructorRoles[profile.id],
                               decoration: const InputDecoration(
                                 labelText: 'Rôle sur cet événement',
-                                hintText: 'Ex. Animation, accueil, coordination',
+                                hintText:
+                                    'Ex. Animation, accueil, coordination',
                               ),
                               validator: (value) =>
                                   value == null || value.trim().isEmpty

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:printing/printing.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/supabase/supabase_providers.dart';
@@ -9,7 +10,9 @@ import '../domain/spotify_link.dart';
 import '../domain/track.dart';
 
 class ChoreographyPage extends ConsumerStatefulWidget {
-  const ChoreographyPage({super.key});
+  const ChoreographyPage({this.activityId, super.key});
+
+  final String? activityId;
 
   @override
   ConsumerState<ChoreographyPage> createState() => _ChoreographyPageState();
@@ -22,14 +25,24 @@ class _ChoreographyPageState extends ConsumerState<ChoreographyPage> {
   bool _forgottenOnly = false;
 
   Future<void> _edit([Track? track]) async {
+    if (track == null && widget.activityId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Choisissez une activité avant d’ajouter un morceau.'),
+        ),
+      );
+      return;
+    }
     final edited = await showDialog<Track>(
       context: context,
       builder: (_) => _TrackDialog(track: track),
     );
     if (edited == null) return;
     try {
-      await ref.read(choreographyServiceProvider).saveTrack(edited);
-      ref.invalidate(tracksProvider);
+      await ref
+          .read(choreographyServiceProvider)
+          .saveTrack(edited.copyWith(activityId: widget.activityId));
+      ref.invalidate(tracksForActivityProvider(widget.activityId));
     } catch (error) {
       if (mounted) _showError(error);
     }
@@ -57,8 +70,10 @@ class _ChoreographyPageState extends ConsumerState<ChoreographyPage> {
     );
     if (confirmed != true) return;
     try {
-      await ref.read(choreographyServiceProvider).deleteTrack(track.id);
-      ref.invalidate(tracksProvider);
+      await ref
+          .read(choreographyServiceProvider)
+          .deleteTrack(track.id, localDocumentPath: track.localDocumentPath);
+      ref.invalidate(tracksForActivityProvider(widget.activityId));
     } catch (error) {
       if (mounted) _showError(error);
     }
@@ -75,8 +90,13 @@ class _ChoreographyPageState extends ConsumerState<ChoreographyPage> {
       final bytes = await file.readAsBytes();
       await ref
           .read(choreographyServiceProvider)
-          .uploadDocument(track: track, bytes: bytes, fileName: file.name);
-      ref.invalidate(tracksProvider);
+          .saveLocalDocument(
+            track: track,
+            bytes: bytes,
+            fileName: file.name,
+            activityId: widget.activityId,
+          );
+      ref.invalidate(tracksForActivityProvider(widget.activityId));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Document associé au morceau.')),
@@ -88,9 +108,39 @@ class _ChoreographyPageState extends ConsumerState<ChoreographyPage> {
   }
 
   Future<void> _openDocument(Track track) async {
-    final path = track.documentUrl;
-    if (path == null || path.isEmpty) return;
     try {
+      final localPath = track.localDocumentPath;
+      if (localPath != null && localPath.isNotEmpty) {
+        final bytes = await ref
+            .read(choreographyServiceProvider)
+            .readLocalDocument(localPath);
+        if (!mounted) return;
+        final isPdf = localPath.toLowerCase().endsWith('.pdf');
+        await showDialog<void>(
+          context: context,
+          builder: (context) => Dialog(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 900, maxHeight: 720),
+              child: SizedBox(
+                width: MediaQuery.sizeOf(context).width * .94,
+                height: MediaQuery.sizeOf(context).height * .9,
+                child: isPdf
+                    ? PdfPreview(
+                        build: (_) async => bytes,
+                        allowPrinting: false,
+                        allowSharing: false,
+                      )
+                    : InteractiveViewer(
+                        child: Image.memory(bytes, fit: BoxFit.contain),
+                      ),
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+      final path = track.documentUrl;
+      if (path == null || path.isEmpty) return;
       final signedUrl = await ref
           .read(choreographyServiceProvider)
           .signedDocumentUrl(path);
@@ -132,7 +182,7 @@ class _ChoreographyPageState extends ConsumerState<ChoreographyPage> {
 
   @override
   Widget build(BuildContext context) {
-    final tracks = ref.watch(tracksProvider);
+    final tracks = ref.watch(tracksForActivityProvider(widget.activityId));
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _edit(),
@@ -143,7 +193,8 @@ class _ChoreographyPageState extends ConsumerState<ChoreographyPage> {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => _RetryState(
           error: error,
-          onRetry: () => ref.invalidate(tracksProvider),
+          onRetry: () =>
+              ref.invalidate(tracksForActivityProvider(widget.activityId)),
         ),
         data: (allTracks) {
           final query = _query.toLowerCase().trim();
@@ -279,12 +330,14 @@ class _ChoreographyPageState extends ConsumerState<ChoreographyPage> {
                                   PopupMenuItem(
                                     value: 'document',
                                     child: Text(
-                                      track.documentUrl == null
-                                          ? 'Joindre une fiche PDF/photo'
+                                      track.localDocumentPath == null &&
+                                              track.documentUrl == null
+                                          ? 'Joindre une fiche locale PDF/photo'
                                           : 'Remplacer la fiche PDF/photo',
                                     ),
                                   ),
-                                  if (track.documentUrl != null)
+                                  if (track.localDocumentPath != null ||
+                                      track.documentUrl != null)
                                     const PopupMenuItem(
                                       value: 'open',
                                       child: Text('Ouvrir la fiche'),

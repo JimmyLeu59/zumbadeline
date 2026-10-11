@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/supabase/supabase_providers.dart';
+import '../../../core/updates/update_service.dart';
 import '../../finances/domain/payment.dart';
 import '../../staff/domain/app_user_profile.dart';
 
@@ -138,6 +139,15 @@ class _PricingFormState extends ConsumerState<_PricingForm> {
   Widget build(BuildContext context) => ListView(
     padding: const EdgeInsets.all(24),
     children: [
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: () => promptForUpdate(context, silent: false),
+          icon: const Icon(Icons.system_update_alt),
+          label: const Text('Rechercher des mises à jour'),
+        ),
+      ),
+      const SizedBox(height: 20),
       Text('Tarifs', style: Theme.of(context).textTheme.headlineSmall),
       const SizedBox(height: 8),
       const Text(
@@ -216,6 +226,18 @@ class _PricingFormState extends ConsumerState<_PricingForm> {
         ),
       ),
       const SizedBox(height: 24),
+      Text(
+        'Forfaits mensuels et trimestriels',
+        style: Theme.of(context).textTheme.titleLarge,
+      ),
+      const SizedBox(height: 8),
+      const Text(
+        'Mensuel : valable 30 jours. Trimestriel : valable 3 mois. '
+        'Le nombre de cours par semaine est limité selon le forfait.',
+      ),
+      const SizedBox(height: 8),
+      const _PlanPricesSection(),
+      const SizedBox(height: 24),
       Text('Apparence', style: Theme.of(context).textTheme.titleLarge),
       const SizedBox(height: 8),
       DropdownButtonFormField<ThemeMode>(
@@ -280,6 +302,102 @@ class _PricingFormState extends ConsumerState<_PricingForm> {
     keyboardType: const TextInputType.numberWithOptions(decimal: true),
     decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon)),
   );
+}
+
+class _PlanPricesSection extends ConsumerStatefulWidget {
+  const _PlanPricesSection();
+
+  @override
+  ConsumerState<_PlanPricesSection> createState() => _PlanPricesSectionState();
+}
+
+class _PlanPricesSectionState extends ConsumerState<_PlanPricesSection> {
+  final _controllers = <String, TextEditingController>{};
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    for (final controller in _controllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _save(List<SubscriptionPlan> plans) async {
+    final prices = <String, double>{};
+    for (final plan in plans) {
+      final value = double.tryParse(
+        _controllers[plan.code]!.text.replaceAll(',', '.').trim(),
+      );
+      if (value == null || value < 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Montant invalide : ${plan.label}')),
+        );
+        return;
+      }
+      prices[plan.code] = value;
+    }
+    setState(() => _saving = true);
+    try {
+      final service = ref.read(financeServiceProvider);
+      for (final entry in prices.entries) {
+        await service.savePlanPrice(entry.key, entry.value);
+      }
+      ref.invalidate(subscriptionPlansProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Tarifs des forfaits mis à jour.')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Enregistrement impossible : $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final plans = ref.watch(subscriptionPlansProvider);
+    return plans.when(
+      loading: () => const LinearProgressIndicator(),
+      error: (error, _) => Text('Forfaits indisponibles : $error'),
+      data: (items) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final plan in items)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: TextField(
+                controller: _controllers.putIfAbsent(
+                  plan.code,
+                  () => TextEditingController(
+                    text: plan.price.toStringAsFixed(2),
+                  ),
+                ),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: InputDecoration(
+                  labelText: '${plan.label} (€)',
+                  prefixIcon: const Icon(Icons.event_repeat_outlined),
+                ),
+              ),
+            ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _saving ? null : () => _save(items),
+            icon: const Icon(Icons.save_outlined),
+            label: const Text('Enregistrer les forfaits'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _StaffProfilesSection extends ConsumerWidget {
