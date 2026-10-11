@@ -227,81 +227,100 @@ class FinancesPage extends ConsumerWidget {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(16),
-            child: pricing.when(
-              loading: () => const LinearProgressIndicator(),
-              error: (error, _) => Card(
-                child: ListTile(
-                  leading: const Icon(Icons.error_outline),
-                  title: const Text('Tarifs indisponibles'),
-                  subtitle: Text(error.toString()),
-                  trailing: IconButton(
-                    onPressed: () => ref.invalidate(pricingProvider),
-                    icon: const Icon(Icons.refresh),
-                  ),
-                ),
-              ),
-              data: (value) => Wrap(
-                spacing: 10,
-                runSpacing: 10,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Card(
+              margin: EdgeInsets.zero,
+              clipBehavior: Clip.antiAlias,
+              child: ExpansionTile(
+                leading: const Icon(Icons.sell_outlined),
+                title: const Text('Tarifs et forfaits'),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                expandedCrossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _PriceChip(
-                    label: 'Adhésion',
-                    amount: value.annualMembershipFee,
-                  ),
-                  _PriceChip(label: 'Unité', amount: value.singleClassPrice),
-                  _PriceChip(label: '1re carte', amount: value.firstCardPrice),
-                  _PriceChip(
-                    label: 'Renouvellement',
-                    amount: value.renewalCardPrice,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: plans.when(
-              loading: () => const LinearProgressIndicator(),
-              error: (error, _) => Card(
-                child: ListTile(
-                  leading: const Icon(Icons.error_outline),
-                  title: const Text('Forfaits indisponibles'),
-                  subtitle: Text(error.toString()),
-                  trailing: IconButton(
-                    onPressed: () => ref.invalidate(subscriptionPlansProvider),
-                    icon: const Icon(Icons.refresh),
-                  ),
-                ),
-              ),
-              data: (items) => items.isEmpty
-                  ? const SizedBox.shrink()
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Forfaits disponibles',
-                          style: Theme.of(context).textTheme.titleSmall,
+                  pricing.when(
+                    loading: () => const LinearProgressIndicator(),
+                    error: (error, _) => Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.error_outline),
+                        title: const Text('Tarifs indisponibles'),
+                        subtitle: Text(error.toString()),
+                        trailing: IconButton(
+                          onPressed: () => ref.invalidate(pricingProvider),
+                          icon: const Icon(Icons.refresh),
                         ),
-                        const SizedBox(height: 6),
-                        SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: [
-                              for (final plan in items)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 8),
-                                  child: _PriceChip(
-                                    label:
-                                        '${plan.label} (${plan.validityLabel})',
-                                    amount: plan.price,
-                                  ),
-                                ),
-                            ],
-                          ),
+                      ),
+                    ),
+                    data: (value) => Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        _PriceChip(
+                          label: 'Adhésion',
+                          amount: value.annualMembershipFee,
+                        ),
+                        _PriceChip(
+                          label: 'Unité',
+                          amount: value.singleClassPrice,
+                        ),
+                        _PriceChip(
+                          label: '1re carte',
+                          amount: value.firstCardPrice,
+                        ),
+                        _PriceChip(
+                          label: 'Renouvellement',
+                          amount: value.renewalCardPrice,
                         ),
                       ],
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  plans.when(
+                    loading: () => const LinearProgressIndicator(),
+                    error: (error, _) => Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.error_outline),
+                        title: const Text('Forfaits indisponibles'),
+                        subtitle: Text(error.toString()),
+                        trailing: IconButton(
+                          onPressed: () =>
+                              ref.invalidate(subscriptionPlansProvider),
+                          icon: const Icon(Icons.refresh),
+                        ),
+                      ),
+                    ),
+                    data: (items) => items.isEmpty
+                        ? const SizedBox.shrink()
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Forfaits disponibles',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 6),
+                              SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Row(
+                                  children: [
+                                    for (final plan in items)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          right: 8,
+                                        ),
+                                        child: _PriceChip(
+                                          label:
+                                              '${plan.label} (${plan.validityLabel})',
+                                          amount: plan.price,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                ],
+              ),
             ),
           ),
           Padding(
