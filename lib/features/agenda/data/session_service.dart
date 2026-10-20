@@ -39,7 +39,7 @@ class SessionService {
           })
           .toList(growable: false);
     }
-    var query = _client.from('sessions').select();
+    var query = _client.from('sessions').select('*, attendances(count)');
     if (activityId != null) {
       query = query.eq('activity_id', activityId);
     }
@@ -66,12 +66,20 @@ class SessionService {
       );
     }
     final enrichedRows = rows
-        .map(
-          (row) => {
+        .map((row) {
+          final attendanceRows = row['attendances'];
+          final attendanceCount = attendanceRows is List
+              ? attendanceRows.fold<int>(0, (count, item) {
+                  if (item is! Map || item['count'] is! int) return count;
+                  return count + (item['count'] as int);
+                })
+              : 0;
+          return {
             ...row,
+            'attendance_count': attendanceCount,
             'instructors': instructorsBySession[row['id']] ?? const [],
-          },
-        )
+          };
+        })
         .toList(growable: false);
     await _offlineStore.cacheJson(cacheKey, enrichedRows);
     return enrichedRows
@@ -177,6 +185,37 @@ class SessionService {
         .eq('id', sessionId);
   }
 
+  Future<void> savePreparation({
+    required String sessionId,
+    required String? notes,
+    required List<Map<String, dynamic>> equipmentChecklist,
+    required List<String> trackIds,
+    required List<String> songIds,
+  }) async {
+    await _client.rpc(
+      'save_session_preparation',
+      params: {
+        'p_session_id': sessionId,
+        'p_preparation_notes': _emptyToNull(notes),
+        'p_equipment_checklist': equipmentChecklist,
+        'p_track_ids': trackIds,
+        'p_song_ids': songIds,
+      },
+    );
+    await _offlineStore.cacheJson(
+      'playlist:$sessionId',
+      trackIds
+          .map((id) => {'track_id': id, 'played': false})
+          .toList(growable: false),
+    );
+    await _offlineStore.cacheJson(
+      'repertoire:$sessionId',
+      songIds
+          .map((id) => {'song_id': id, 'played': false})
+          .toList(growable: false),
+    );
+  }
+
   Future<List<Map<String, dynamic>>> attendanceForSession(
     String sessionId,
   ) async {
@@ -190,22 +229,50 @@ class SessionService {
         )
         .eq('session_id', sessionId)
         .order('checked_in_at');
-    await _offlineStore.cacheAttendance(
-      sessionId,
-      rows
-          .map(
-            (row) => {
-              'id': row['id'],
-              'session_id': sessionId,
-              'member_id': row['member_id'],
-              'card_id': row['card_id'],
-              'checked_in_at': row['checked_in_at'],
-              'offline_pending': false,
-            },
-          )
-          .toList(),
-    );
-    return rows;
+    final presentRows = rows
+        .map((row) => {...row, 'attendance_status': 'present'})
+        .toList(growable: false);
+    final absenceRows = await _client
+        .from('session_absences')
+        .select(
+          'session_id, member_id, confirmed_at, corrected_at, members!inner(first_name, last_name)',
+        )
+        .eq('session_id', sessionId)
+        .isFilter('corrected_at', null);
+    final currentAbsences = absenceRows
+        .map(
+          (row) => {
+            ...row,
+            'attendance_status': 'absent',
+            'checked_in_at': null,
+            'offline_pending': false,
+          },
+        )
+        .toList(growable: false);
+    await _offlineStore.cacheAttendance(sessionId, [
+      ...presentRows.map(
+        (row) => {
+          'id': row['id'],
+          'session_id': sessionId,
+          'member_id': row['member_id'],
+          'card_id': row['card_id'],
+          'checked_in_at': row['checked_in_at'],
+          'offline_pending': false,
+          'attendance_status': 'present',
+        },
+      ),
+      ...currentAbsences.map(
+        (row) => {
+          'session_id': sessionId,
+          'member_id': row['member_id'],
+          'confirmed_at': row['confirmed_at'],
+          'members': row['members'],
+          'attendance_status': 'absent',
+          'offline_pending': false,
+        },
+      ),
+    ]);
+    return [...presentRows, ...currentAbsences];
   }
 
   Future<List<String>> tracksForSession(String sessionId) async {
@@ -216,11 +283,58 @@ class SessionService {
     }
     final rows = await _client
         .from('session_tracks')
-        .select('track_id')
+        .select('track_id, played')
         .eq('session_id', sessionId)
         .order('position');
     await _offlineStore.cacheJson('playlist:$sessionId', rows);
     return rows.map((row) => row['track_id'] as String).toList();
+  }
+
+  Future<List<String>> playedTracksForSession(String sessionId) async {
+    if (!await _offlineStore.isOnline()) {
+      return (_offlineStore.readJsonList('playlist:$sessionId') ?? [])
+          .where((row) => row['played'] == true)
+          .map((row) => row['track_id'] as String)
+          .toList(growable: false);
+    }
+    final rows = await _client
+        .from('session_tracks')
+        .select('track_id')
+        .eq('session_id', sessionId)
+        .eq('played', true)
+        .order('position');
+    return rows.map((row) => row['track_id'] as String).toList();
+  }
+
+  Future<List<String>> repertoireForSession(String sessionId) async {
+    if (!await _offlineStore.isOnline()) {
+      final cached = _offlineStore.readJsonList('repertoire:$sessionId');
+      if (cached == null) return const [];
+      return cached.map((row) => row['song_id'] as String).toList();
+    }
+    final rows = await _client
+        .from('session_repertoire_items')
+        .select('song_id, played')
+        .eq('session_id', sessionId)
+        .order('position');
+    await _offlineStore.cacheJson('repertoire:$sessionId', rows);
+    return rows.map((row) => row['song_id'] as String).toList();
+  }
+
+  Future<List<String>> playedSongsForSession(String sessionId) async {
+    if (!await _offlineStore.isOnline()) {
+      return (_offlineStore.readJsonList('repertoire:$sessionId') ?? [])
+          .where((row) => row['played'] == true)
+          .map((row) => row['song_id'] as String)
+          .toList(growable: false);
+    }
+    final rows = await _client
+        .from('session_repertoire_items')
+        .select('song_id')
+        .eq('session_id', sessionId)
+        .eq('played', true)
+        .order('position');
+    return rows.map((row) => row['song_id'] as String).toList();
   }
 
   Future<List<Map<String, dynamic>>> eventRegistrations(
@@ -259,6 +373,40 @@ class SessionService {
     await _client.rpc(
       'save_session_playlist',
       params: {'p_session_id': sessionId, 'p_track_ids': trackIds},
+    );
+    await _offlineStore.cacheJson(
+      'playlist:$sessionId',
+      trackIds
+          .map((id) => {'track_id': id, 'played': false})
+          .toList(growable: false),
+    );
+  }
+
+  Future<Map<String, dynamic>?> sessionClosure(String sessionId) async {
+    if (!await _offlineStore.isOnline()) return null;
+    return _client
+        .from('session_closures')
+        .select('closed_at, follow_up_notes')
+        .eq('session_id', sessionId)
+        .maybeSingle();
+  }
+
+  Future<void> closeSessionWithSummary({
+    required String sessionId,
+    required List<String> absentMemberIds,
+    required List<String> playedTrackIds,
+    required List<String> playedSongIds,
+    required String followUpNotes,
+  }) async {
+    await _client.rpc(
+      'close_session_with_summary',
+      params: {
+        'p_session_id': sessionId,
+        'p_absent_member_ids': absentMemberIds,
+        'p_played_track_ids': playedTrackIds,
+        'p_played_song_ids': playedSongIds,
+        'p_follow_up_notes': followUpNotes,
+      },
     );
   }
 

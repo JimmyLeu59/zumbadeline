@@ -113,10 +113,15 @@ class ReportService {
                 [
                   '${index + 1}',
                   members[index].fullName,
-                  attendanceByMember.containsKey(members[index].id)
-                      ? 'Present'
-                      : 'Absent',
-                  attendanceByMember.containsKey(members[index].id)
+                  switch (attendanceByMember[members[index].id]
+                      ?['attendance_status']) {
+                    'present' => 'Présent',
+                    'absent' => 'Absent confirmé',
+                    _ => 'À confirmer',
+                  },
+                  attendanceByMember[members[index].id]
+                              ?['attendance_status'] ==
+                          'present'
                       ? _checkedInTime(attendanceByMember[members[index].id]!)
                       : '',
                   '',

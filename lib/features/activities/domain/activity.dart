@@ -13,6 +13,8 @@ class Activity {
   final String colorCode;
   final String icon;
 
+  bool get isSinging => icon == 'mic' || icon == 'music_note';
+
   Color get accentColor {
     final value = int.tryParse(colorCode.replaceFirst('#', ''), radix: 16);
     return Color(0xFF000000 | (value ?? 0x006750A4));

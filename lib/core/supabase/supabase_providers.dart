@@ -15,6 +15,8 @@ import '../../features/members/data/member_service.dart';
 import '../../features/members/data/card_notification_service.dart';
 import '../../features/members/domain/card_notification.dart';
 import '../../features/members/domain/member.dart';
+import '../../features/repertoire/data/repertoire_service.dart';
+import '../../features/repertoire/domain/repertoire_song.dart';
 import '../../features/staff/data/staff_profile_service.dart';
 import '../../features/staff/domain/app_user_profile.dart';
 import '../../features/statistics/data/statistics_service.dart';
@@ -135,6 +137,19 @@ final sessionServiceProvider = Provider<SessionService>((ref) {
     ref.watch(offlineStoreProvider),
   );
 });
+
+final repertoireServiceProvider = Provider<RepertoireService>((ref) {
+  return RepertoireService(
+    ref.watch(supabaseClientProvider),
+    ref.watch(offlineStoreProvider),
+  );
+});
+
+final repertoireSongsProvider =
+    FutureProvider.family<List<RepertoireSong>, String>((ref, activityId) {
+      ref.watch(offlineStatusProvider);
+      return ref.watch(repertoireServiceProvider).listSongs(activityId);
+    });
 
 final financeServiceProvider = Provider<FinanceService>((ref) {
   return FinanceService(ref.watch(supabaseClientProvider));

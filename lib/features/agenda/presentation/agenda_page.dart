@@ -8,16 +8,24 @@ import '../data/session_service.dart';
 import '../domain/class_session.dart';
 
 class AgendaPage extends ConsumerStatefulWidget {
-  const AgendaPage({super.key, this.activityId, this.onOpenAttendance});
+  const AgendaPage({
+    super.key,
+    this.activityId,
+    this.onOpenAttendance,
+    this.onOpenWorkflow,
+  });
 
   final String? activityId;
   final ValueChanged<ClassSession>? onOpenAttendance;
+  final ValueChanged<ClassSession>? onOpenWorkflow;
 
   @override
   ConsumerState<AgendaPage> createState() => _AgendaPageState();
 }
 
 class _AgendaPageState extends ConsumerState<AgendaPage> {
+  bool _newestFirst = true;
+
   Future<void> _addSession() async {
     final activities = await _loadActivities();
     if (activities == null || !mounted) return;
@@ -231,6 +239,188 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
     );
   }
 
+  Future<void> _quickCheckIn() async {
+    try {
+      final activities = await ref.read(activitiesProvider.future);
+      if (!mounted) return;
+      if (activities.isEmpty) {
+        throw StateError('Aucune activité accessible pour créer un cours.');
+      }
+
+      final selectedActivityId =
+          widget.activityId ?? ref.read(activitySelectionProvider);
+      Activity? activity = activities
+          .where((item) => item.id == selectedActivityId)
+          .firstOrNull;
+      if (activity == null && activities.length == 1) {
+        activity = activities.single;
+      } else if (activity == null && activities.isNotEmpty) {
+        activity = await showDialog<Activity>(
+          context: context,
+          builder: (context) => SimpleDialog(
+            title: const Text('Choisir une activité'),
+            children: [
+              for (final item in activities)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.pop(context, item),
+                  child: Text(item.name),
+                ),
+            ],
+          ),
+        );
+      }
+      if (activity == null || !mounted) return;
+
+      final startsAt = DateTime.now();
+      final quickSession = await ref
+          .read(sessionServiceProvider)
+          .saveSession(
+            ClassSession(
+              id: '',
+              title: 'Cours rapide · ${activity.name}',
+              type: 'class',
+              activityId: activity.id,
+              startsAt: startsAt,
+              endsAt: startsAt.add(const Duration(hours: 1)),
+              status: 'scheduled',
+            ),
+          );
+      ref.invalidate(sessionsProvider(activity.id));
+      if (mounted) widget.onOpenAttendance?.call(quickSession);
+    } catch (error) {
+      if (mounted) _showError(error);
+    }
+  }
+
+  bool _isPastPointedSession(ClassSession session, DateTime today) {
+    final localStart = session.startsAt.toLocal();
+    final startDate = DateTime(
+      localStart.year,
+      localStart.month,
+      localStart.day,
+    );
+    final todayDate = DateTime(today.year, today.month, today.day);
+    return startDate.isBefore(todayDate) &&
+        (session.status == 'completed' || session.attendanceCount > 0);
+  }
+
+  String _sessionSubtitle(ClassSession session) {
+    final lines = [
+      '${_dateLabel(session.startsAt)} · ${_timeLabel(session.startsAt)}'
+          '${session.location == null ? '' : ' · ${session.location}'}',
+      '${session.isEvent ? 'Événement' : 'Cours'} · '
+          '${_statusLabel(session.status)}'
+          '${session.capacity == null ? '' : ' · Capacité ${session.capacity}'}',
+    ];
+    if (session.instructors.isNotEmpty) {
+      lines.add(
+        'Équipe : ${session.instructors.map((instructor) => '${instructor.displayName} (${instructor.role})').join(', ')}',
+      );
+    }
+    return lines.join('\n');
+  }
+
+  Widget _sessionList(
+    List<ClassSession> sessions, {
+    required String emptyMessage,
+  }) {
+    if (sessions.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(emptyMessage, textAlign: TextAlign.center),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 96),
+      itemCount: sessions.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final session = sessions[index];
+        return Card(
+          child: ListTile(
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 8,
+            ),
+            onTap: () => widget.onOpenWorkflow?.call(session),
+            leading: CircleAvatar(
+              child: Icon(
+                session.isEvent
+                    ? Icons.celebration_outlined
+                    : Icons.calendar_month_outlined,
+              ),
+            ),
+            title: Text(session.title),
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text(_sessionSubtitle(session)),
+            ),
+            isThreeLine: true,
+            trailing: Wrap(
+              children: [
+                if (session.isEvent)
+                  IconButton(
+                    tooltip: 'Inscriptions extérieures',
+                    onPressed: () => _manageGuests(session),
+                    icon: const Icon(Icons.confirmation_number_outlined),
+                  ),
+                IconButton(
+                  tooltip: 'Pointage',
+                  onPressed: () => widget.onOpenAttendance?.call(session),
+                  icon: const Icon(Icons.how_to_reg_outlined),
+                ),
+                if (session.equipmentChecklist.isNotEmpty)
+                  IconButton(
+                    tooltip: 'Check-list matériel',
+                    onPressed: () => _checkEquipment(session),
+                    icon: Badge(
+                      isLabelVisible: session.equipmentChecklist.any(
+                        (item) => item['checked'] != true,
+                      ),
+                      child: const Icon(Icons.checklist_rounded),
+                    ),
+                  ),
+                PopupMenuButton<String>(
+                  onSelected: (value) {
+                    if (value == 'edit') _editSession(session);
+                    if (value == 'cancel') _cancelSession(session);
+                    if (value == 'complete') {
+                      widget.onOpenWorkflow?.call(session);
+                    }
+                    if (value == 'delete') _deleteEvent(session);
+                  },
+                  itemBuilder: (_) => [
+                    if (session.isEvent && session.status == 'scheduled')
+                      const PopupMenuItem(
+                        value: 'edit',
+                        child: Text('Modifier l’événement'),
+                      ),
+                    if (session.status == 'scheduled') ...[
+                      const PopupMenuItem(
+                        value: 'complete',
+                        child: Text('Ouvrir le parcours de séance'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'cancel',
+                        child: Text('Annuler'),
+                      ),
+                    ],
+                    const PopupMenuItem(
+                      value: 'delete',
+                      child: Text('Supprimer de l’agenda'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sessions = ref.watch(sessionsProvider(widget.activityId));
@@ -247,104 +437,88 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
           onRetry: () => ref.invalidate(sessionsProvider(widget.activityId)),
         ),
         data: (items) {
-          if (items.isEmpty) {
-            return const Center(
-              child: Text(
-                'Aucune séance planifiée. Ajoutez un cours ou un événement.',
-              ),
-            );
-          }
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 96),
-            itemCount: items.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
-            itemBuilder: (context, index) {
-              final session = items[index];
-              return Card(
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
-                  leading: CircleAvatar(
-                    child: Icon(
-                      session.isEvent
-                          ? Icons.celebration_outlined
-                          : Icons.calendar_month_outlined,
-                    ),
-                  ),
-                  title: Text(session.title),
-                  subtitle: Padding(
-                    padding: const EdgeInsets.only(top: 5),
-                    child: Text(
-                      '${_dateLabel(session.startsAt)} · '
-                      '${_timeLabel(session.startsAt)}'
-                      '${session.location == null ? '' : ' · ${session.location}'}\n'
-                      '${session.isEvent ? 'Événement' : 'Cours'} · '
-                      '${_statusLabel(session.status)}'
-                      '${session.capacity == null ? '' : ' · Capacité ${session.capacity}'}'
-                      '${session.instructors.isEmpty ? '' : '\nÉquipe : ${session.instructors.map((instructor) => '${instructor.displayName} (${instructor.role})').join(', ')}'}',
-                    ),
-                  ),
-                  isThreeLine: true,
-                  trailing: Wrap(
+          final now = DateTime.now();
+          final visibleItems = items
+              .where((session) => session.status != 'cancelled')
+              .toList(growable: false);
+          final pastSessions =
+              visibleItems
+                  .where((session) => _isPastPointedSession(session, now))
+                  .toList()
+                ..sort(
+                  (a, b) => _newestFirst
+                      ? b.startsAt.compareTo(a.startsAt)
+                      : a.startsAt.compareTo(b.startsAt),
+                );
+          final currentSessions =
+              visibleItems
+                  .where((session) => !_isPastPointedSession(session, now))
+                  .toList()
+                ..sort(
+                  (a, b) => _newestFirst
+                      ? b.startsAt.compareTo(a.startsAt)
+                      : a.startsAt.compareTo(b.startsAt),
+                );
+          return DefaultTabController(
+            length: 2,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    runSpacing: 8,
                     children: [
-                      if (session.isEvent)
-                        IconButton(
-                          tooltip: 'Inscriptions extérieures',
-                          onPressed: () => _manageGuests(session),
-                          icon: const Icon(Icons.confirmation_number_outlined),
-                        ),
-                      IconButton(
-                        tooltip: 'Pointage',
-                        onPressed: () => widget.onOpenAttendance?.call(session),
-                        icon: const Icon(Icons.how_to_reg_outlined),
-                      ),
-                      if (session.equipmentChecklist.isNotEmpty)
-                        IconButton(
-                          tooltip: 'Check-list matériel',
-                          onPressed: () => _checkEquipment(session),
-                          icon: Badge(
-                            isLabelVisible: session.equipmentChecklist.any(
-                              (item) => item['checked'] != true,
-                            ),
-                            child: const Icon(Icons.checklist_rounded),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Switch(
+                            value: _newestFirst,
+                            onChanged: (value) =>
+                                setState(() => _newestFirst = value),
                           ),
-                        ),
-                      PopupMenuButton<String>(
-                        onSelected: (value) {
-                          if (value == 'edit') _editSession(session);
-                          if (value == 'cancel') _cancelSession(session);
-                          if (value == 'complete') _markCompleted(session);
-                          if (value == 'delete') _deleteEvent(session);
-                        },
-                        itemBuilder: (_) => [
-                          if (session.isEvent && session.status == 'scheduled')
-                            const PopupMenuItem(
-                              value: 'edit',
-                              child: Text('Modifier l’événement'),
-                            ),
-                          if (session.status == 'scheduled') ...[
-                            const PopupMenuItem(
-                              value: 'complete',
-                              child: Text('Marquer terminé'),
-                            ),
-                            const PopupMenuItem(
-                              value: 'cancel',
-                              child: Text('Annuler'),
-                            ),
-                          ],
-                          const PopupMenuItem(
-                            value: 'delete',
-                            child: Text('Supprimer de l’agenda'),
+                          const SizedBox(width: 8),
+                          Text(
+                            _newestFirst
+                                ? 'Du plus récent au plus ancien'
+                                : 'Du plus ancien au plus récent',
                           ),
                         ],
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: _quickCheckIn,
+                        icon: const Icon(Icons.flash_on_outlined),
+                        label: const Text('Pointage rapide'),
                       ),
                     ],
                   ),
                 ),
-              );
-            },
+                TabBar(
+                  tabs: [
+                    const Tab(text: 'Séances'),
+                    Tab(text: 'Dates passées (${pastSessions.length})'),
+                  ],
+                ),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      _sessionList(
+                        currentSessions,
+                        emptyMessage: items.isEmpty
+                            ? 'Aucune séance planifiée. Ajoutez un cours ou un événement.'
+                            : 'Aucune séance à afficher.',
+                      ),
+                      _sessionList(
+                        pastSessions,
+                        emptyMessage: 'Aucune séance passée avec des présences enregistrées.',
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           );
         },
       ),
@@ -362,32 +536,6 @@ class _AgendaPageState extends ConsumerState<AgendaPage> {
       await ref
           .read(sessionServiceProvider)
           .updateEquipmentChecklist(session.id, checklist);
-      ref.invalidate(sessionsProvider(widget.activityId));
-    } catch (error) {
-      if (mounted) _showError(error);
-    }
-  }
-
-  Future<void> _markCompleted(ClassSession session) async {
-    try {
-      await ref
-          .read(sessionServiceProvider)
-          .saveSession(
-            ClassSession(
-              id: session.id,
-              title: session.title,
-              type: session.type,
-              startsAt: session.startsAt,
-              endsAt: session.endsAt,
-              status: 'completed',
-              activityId: session.activityId,
-              location: session.location,
-              capacity: session.capacity,
-              preparationNotes: session.preparationNotes,
-              equipmentChecklist: session.equipmentChecklist,
-              instructors: session.instructors,
-            ),
-          );
       ref.invalidate(sessionsProvider(widget.activityId));
     } catch (error) {
       if (mounted) _showError(error);
@@ -1154,10 +1302,10 @@ class _EquipmentChecklistDialogState extends State<_EquipmentChecklistDialog> {
 }
 
 String _dateLabel(DateTime date) =>
-    '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+    '${date.toLocal().day.toString().padLeft(2, '0')}/${date.toLocal().month.toString().padLeft(2, '0')}/${date.toLocal().year}';
 
 String _timeLabel(DateTime date) =>
-    '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    '${date.toLocal().hour.toString().padLeft(2, '0')}:${date.toLocal().minute.toString().padLeft(2, '0')}';
 
 String _statusLabel(String status) => switch (status) {
   'completed' => 'Terminée',

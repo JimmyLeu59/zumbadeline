@@ -9,10 +9,16 @@ import '../../../features/members/domain/member.dart';
 import '../../finances/domain/payment.dart';
 
 class AttendancePage extends ConsumerStatefulWidget {
-  const AttendancePage({super.key, this.activityId, this.initialSession});
+  const AttendancePage({
+    super.key,
+    this.activityId,
+    this.initialSession,
+    this.onAttendanceChanged,
+  });
 
   final String? activityId;
   final ClassSession? initialSession;
+  final VoidCallback? onAttendanceChanged;
 
   @override
   ConsumerState<AttendancePage> createState() => _AttendancePageState();
@@ -132,9 +138,11 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
               operationId: _uuid.v4(),
             );
       }
+      ref.invalidate(sessionsProvider(widget.activityId));
       ref.invalidate(membersForActivityProvider(widget.activityId));
       if (!mounted) return;
       setState(_loadAttendance);
+      widget.onAttendanceChanged?.call();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -363,6 +371,11 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
               return const Center(child: CircularProgressIndicator());
             }
             final checkedInIds = snapshot.data!
+                .where((row) => row['attendance_status'] != 'absent')
+                .map((row) => row['member_id'] as String)
+                .toSet();
+            final absentIds = snapshot.data!
+                .where((row) => row['attendance_status'] == 'absent')
                 .map((row) => row['member_id'] as String)
                 .toSet();
             final checkedInCount = checkedInIds.length;
@@ -375,6 +388,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                       Expanded(
                         child: Text(
                           '$checkedInCount présent(s) · '
+                          '${absentIds.length} absent(s) confirmé(s) · '
                           '${visible.length} adhérent(s)',
                         ),
                       ),
@@ -397,6 +411,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                     itemBuilder: (context, index) {
                       final member = visible[index];
                       final isCheckedIn = checkedInIds.contains(member.id);
+                      final isAbsent = absentIds.contains(member.id);
                       final isLoading = member.id == _checkingMemberId;
                       return Card(
                         child: ListTile(
@@ -412,6 +427,15 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                               ? const Chip(
                                   avatar: Icon(Icons.check, size: 18),
                                   label: Text('Présent'),
+                                )
+                              : isAbsent
+                              ? FilledButton.tonalIcon(
+                                  onPressed:
+                                      _checkingMemberId == null && !isLoading
+                                      ? () => _checkIn(member)
+                                      : null,
+                                  icon: const Icon(Icons.edit_outlined),
+                                  label: const Text('Corriger en présent'),
                                 )
                               : FilledButton.tonalIcon(
                                   onPressed:

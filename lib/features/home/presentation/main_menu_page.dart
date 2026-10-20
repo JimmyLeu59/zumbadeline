@@ -8,12 +8,14 @@ import '../../../core/updates/update_service.dart';
 import '../../activities/presentation/activity_context_switcher.dart';
 import '../../agenda/domain/class_session.dart';
 import '../../agenda/presentation/agenda_page.dart';
+import '../../agenda/presentation/session_workflow_page.dart';
 import '../../attendance/presentation/attendance_page.dart';
 import '../../choreography/presentation/choreography_page.dart';
 import '../../finances/presentation/finances_page.dart';
 import '../../members/presentation/members_page.dart';
 import '../../members/domain/card_notification.dart';
 import '../../room/presentation/room_page.dart';
+import '../../repertoire/presentation/repertoire_page.dart';
 import '../../settings/presentation/settings_page.dart';
 import '../../statistics/presentation/statistics_page.dart';
 import '../../staff/domain/app_user_profile.dart';
@@ -110,6 +112,42 @@ class _MainMenuPageState extends ConsumerState<MainMenuPage> {
       _selected = _Destination.attendance;
       _initialAttendanceSession = session;
     });
+  }
+
+  Future<void> _openSessionWorkflow(ClassSession session) async {
+    final activityId =
+        session.activityId ?? ref.read(activitySelectionProvider);
+    try {
+      if (activityId == null) {
+        throw StateError('La séance n’est rattachée à aucune activité.');
+      }
+      final activities = await ref.read(activitiesProvider.future);
+      final activity = activities
+          .where((item) => item.id == activityId)
+          .firstOrNull;
+      if (activity == null) {
+        throw StateError('L’activité de cette séance est introuvable.');
+      }
+      if (!mounted) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => SessionWorkflowPage(
+            session: session,
+            activityId: activityId,
+            isSinging: activity.isSinging,
+          ),
+        ),
+      );
+      if (mounted) {
+        ref.invalidate(sessionsProvider(activityId));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Ouverture impossible : $error')));
+      }
+    }
   }
 
   void _showMoreMenu() {
@@ -491,8 +529,19 @@ class _MainMenuPageState extends ConsumerState<MainMenuPage> {
       _Destination.agenda => AgendaPage(
         activityId: activityId,
         onOpenAttendance: _openAttendance,
+        onOpenWorkflow: _openSessionWorkflow,
       ),
-      _Destination.choreography => ChoreographyPage(activityId: activityId),
+      _Destination.choreography =>
+        activityId != null &&
+                ref
+                        .watch(activitiesProvider)
+                        .valueOrNull
+                        ?.where((activity) => activity.id == activityId)
+                        .firstOrNull
+                        ?.isSinging ==
+                    true
+            ? RepertoirePage(activityId: activityId)
+            : ChoreographyPage(activityId: activityId),
       _Destination.attendance => AttendancePage(
         activityId: activityId,
         initialSession: _initialAttendanceSession,
@@ -811,7 +860,7 @@ String _labelFor(_Destination destination) => switch (destination) {
   _Destination.home => 'Accueil',
   _Destination.members => 'Adhérents',
   _Destination.agenda => 'Agenda',
-  _Destination.choreography => 'Chorégraphies',
+  _Destination.choreography => 'Bibliothèque',
   _Destination.attendance => 'Pointage rapide',
   _Destination.room => 'Mode en salle',
   _Destination.statistics => 'Statistiques',

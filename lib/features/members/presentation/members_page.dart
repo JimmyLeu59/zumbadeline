@@ -327,130 +327,141 @@ class _MembersPageState extends ConsumerState<MembersPage> {
                 (member.email?.toLowerCase().contains(query) ?? false) ||
                 (member.phone?.contains(query) ?? false);
           }).toList();
-          return Column(
-            children: [
-              if (visible.any(
+          final membersToWatch = visible
+              .where(
                 (member) =>
                     member.cardExpiringAt != null || member.cardHasLastClass,
-              ))
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-                  child: Card(
-                    color: Theme.of(context).colorScheme.tertiaryContainer,
-                    child: ListTile(
-                      leading: const Icon(Icons.notifications_active_outlined),
-                      title: const Text('Cartes à surveiller'),
-                      subtitle: Text(
-                        '${visible.where((member) => member.cardExpiringAt != null || member.cardHasLastClass).length} adhérent(s) ont une carte qui expire bientôt ou approche de son dernier cours.',
+              )
+              .length;
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth > 1000
+                  ? 3
+                  : constraints.maxWidth > 650
+                  ? 2
+                  : 1;
+              return CustomScrollView(
+                slivers: [
+                  if (membersToWatch > 0)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                        child: Card(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .tertiaryContainer,
+                          child: ListTile(
+                            leading: const Icon(
+                              Icons.notifications_active_outlined,
+                            ),
+                            title: const Text('Cartes à surveiller'),
+                            subtitle: Text(
+                              '$membersToWatch adhérent(s) ont une carte qui expire bientôt ou approche de son dernier cours.',
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                      child: Wrap(
+                        spacing: 12,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: constraints.maxWidth > 520
+                                ? constraints.maxWidth - 170
+                                : constraints.maxWidth,
+                            child: TextField(
+                              decoration: const InputDecoration(
+                                prefixIcon: Icon(Icons.search),
+                                hintText:
+                                    'Rechercher par nom, e-mail ou téléphone',
+                              ),
+                              onChanged: (value) =>
+                                  setState(() => _search = value),
+                            ),
+                          ),
+                          FilterChip(
+                            label: const Text('Actifs uniquement'),
+                            selected: _activeOnly,
+                            onSelected: (value) =>
+                                setState(() => _activeOnly = value),
+                          ),
+                          FilledButton.tonalIcon(
+                            onPressed: visible.isEmpty
+                                ? null
+                                : () => _exportTrombinoscope(visible),
+                            icon: const Icon(Icons.picture_as_pdf_outlined),
+                            label: const Text('Exporter en PDF'),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-                child: LayoutBuilder(
-                  builder: (context, constraints) => Wrap(
-                    spacing: 12,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: constraints.maxWidth > 520
-                            ? constraints.maxWidth - 170
-                            : constraints.maxWidth,
-                        child: TextField(
-                          decoration: const InputDecoration(
-                            prefixIcon: Icon(Icons.search),
-                            hintText: 'Rechercher par nom, e-mail ou téléphone',
-                          ),
-                          onChanged: (value) => setState(() => _search = value),
-                        ),
-                      ),
-                      FilterChip(
-                        label: const Text('Actifs uniquement'),
-                        selected: _activeOnly,
-                        onSelected: (value) =>
-                            setState(() => _activeOnly = value),
-                      ),
-                      FilledButton.tonalIcon(
-                        onPressed: visible.isEmpty
-                            ? null
-                            : () => _exportTrombinoscope(visible),
-                        icon: const Icon(Icons.picture_as_pdf_outlined),
-                        label: const Text('Exporter en PDF'),
-                      ),
-                    ],
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Text('${visible.length} adhérent(s)'),
+                    ),
                   ),
-                ),
-              ),
-              const _InstructorStrip(),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('${visible.length} adhérent(s)'),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: visible.isEmpty
-                    ? const _EmptyState(
+                  if (visible.isEmpty)
+                    const SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: _EmptyState(
                         icon: Icons.groups_outlined,
                         title: 'Aucun adhérent trouvé',
                         message: 'Ajoutez une fiche ou modifiez les critères de recherche.',
-                      )
-                    : LayoutBuilder(
-                        builder: (context, constraints) {
-                          final columns = constraints.maxWidth > 1000
-                              ? 3
-                              : constraints.maxWidth > 650
-                              ? 2
-                              : 1;
-                          return GridView.builder(
-                            padding: const EdgeInsets.fromLTRB(20, 8, 20, 92),
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: columns,
-                                  crossAxisSpacing: 12,
-                                  mainAxisSpacing: 12,
-                                  mainAxisExtent: 190,
-                                ),
-                            itemCount: visible.length,
-                            itemBuilder: (context, index) => _MemberCard(
-                              member: visible[index],
-                              onEdit: canManageMembers
-                                  ? () => _editMember(visible[index])
-                                  : null,
-                              onArchive:
-                                  canManageMembers && visible[index].isActive
-                                  ? () => _archive(visible[index])
-                                  : null,
-                              onReactivate:
-                                  !canManageMembers || visible[index].isActive
-                                  ? null
-                                  : () => _reactivate(visible[index]),
-                              onChangePhoto: canManageMembers
-                                  ? () => _changePhoto(visible[index])
-                                  : null,
-                              onAdjustPasses: isAdmin
-                                  ? () => _adjustPasses(visible[index])
-                                  : null,
-                              onNotify:
-                                  canManageMembers &&
-                                      (visible[index].email
-                                              ?.trim()
-                                              .isNotEmpty ??
-                                          false) &&
-                                      (visible[index].cardExpiringAt != null ||
-                                          visible[index].cardHasLastClass)
-                                  ? () => _notifyMember(visible[index])
-                                  : null,
-                            ),
-                          );
-                        },
                       ),
-              ),
-            ],
+                    )
+                  else
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 92),
+                      sliver: SliverGrid(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: columns,
+                          crossAxisSpacing: 12,
+                          mainAxisSpacing: 12,
+                          mainAxisExtent: 190,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) => _MemberCard(
+                            member: visible[index],
+                            onEdit: canManageMembers
+                                ? () => _editMember(visible[index])
+                                : null,
+                            onArchive:
+                                canManageMembers && visible[index].isActive
+                                ? () => _archive(visible[index])
+                                : null,
+                            onReactivate:
+                                !canManageMembers || visible[index].isActive
+                                ? null
+                                : () => _reactivate(visible[index]),
+                            onChangePhoto: canManageMembers
+                                ? () => _changePhoto(visible[index])
+                                : null,
+                            onAdjustPasses: isAdmin
+                                ? () => _adjustPasses(visible[index])
+                                : null,
+                            onNotify:
+                                canManageMembers &&
+                                    (visible[index].email?.trim().isNotEmpty ??
+                                        false) &&
+                                    (visible[index].cardExpiringAt != null ||
+                                        visible[index].cardHasLastClass)
+                                ? () => _notifyMember(visible[index])
+                                : null,
+                          ),
+                          childCount: visible.length,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
           );
         },
       ),
@@ -648,102 +659,6 @@ class _MemberCameraDialogState extends State<_MemberCameraDialog> {
       ),
     ],
   );
-}
-
-class _InstructorStrip extends ConsumerWidget {
-  const _InstructorStrip();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final profiles = ref.watch(staffProfilesProvider);
-    return profiles.when(
-      loading: () => const LinearProgressIndicator(),
-      error: (error, _) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-        child: Row(
-          children: [
-            const Icon(Icons.error_outline, size: 18),
-            const SizedBox(width: 8),
-            Expanded(child: Text('Animateurs indisponibles : $error')),
-            IconButton(
-              tooltip: 'Recharger les animateurs',
-              onPressed: () => ref.invalidate(staffProfilesProvider),
-              icon: const Icon(Icons.refresh),
-            ),
-          ],
-        ),
-      ),
-      data: (allProfiles) {
-        final instructors = allProfiles
-            .where((profile) => profile.teachingDances.isNotEmpty)
-            .toList(growable: false);
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Animateurs',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 6),
-              if (instructors.isEmpty)
-                const Text('Aucune discipline animée renseignée.')
-              else
-                SizedBox(
-                  height: 88,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: instructors.length,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(width: 10),
-                    itemBuilder: (context, index) {
-                      final instructor = instructors[index];
-                      final photoUrl = ref
-                          .watch(staffPhotoUrlProvider(instructor.photoUrl))
-                          .valueOrNull;
-                      return SizedBox(
-                        width: 240,
-                        child: Card(
-                          margin: EdgeInsets.zero,
-                          child: ListTile(
-                            leading: CircleAvatar(
-                              foregroundImage: photoUrl == null
-                                  ? null
-                                  : NetworkImage(photoUrl),
-                              child: Text(
-                                instructor.displayName.trim().isEmpty
-                                    ? 'A'
-                                    : instructor.displayName
-                                          .trim()[0]
-                                          .toUpperCase(),
-                              ),
-                            ),
-                            title: Text(
-                              instructor.displayName.isEmpty
-                                  ? 'Animateur·trice'
-                                  : instructor.displayName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              'Animateur·trice · '
-                              '${instructor.teachingDances.join(', ')}',
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
 }
 
 class _MemberCard extends ConsumerWidget {

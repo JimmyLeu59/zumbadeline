@@ -61,7 +61,7 @@ class ClassSession {
 
   factory ClassSession.fromMap(
     Map<String, dynamic> map, {
-    int attendanceCount = 0,
+    int? attendanceCount,
   }) {
     final rawChecklist = map['equipment_checklist'];
     final checklist = rawChecklist is List
@@ -81,7 +81,8 @@ class ClassSession {
       capacity: map['capacity'] as int?,
       preparationNotes: map['preparation_notes'] as String?,
       equipmentChecklist: checklist,
-      attendanceCount: attendanceCount,
+      attendanceCount:
+          attendanceCount ?? map['attendance_count'] as int? ?? 0,
       instructors: (map['instructors'] as List<dynamic>? ?? [])
           .whereType<Map<String, dynamic>>()
           .map(SessionInstructor.fromMap)

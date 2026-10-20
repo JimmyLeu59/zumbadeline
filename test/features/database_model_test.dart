@@ -9,6 +9,7 @@ import 'package:zumbadeline/features/finances/domain/expense_report.dart';
 import 'package:zumbadeline/features/finances/domain/payment.dart';
 import 'package:zumbadeline/features/members/domain/card_notification.dart';
 import 'package:zumbadeline/features/members/domain/member.dart';
+import 'package:zumbadeline/features/repertoire/domain/repertoire_song.dart';
 import 'package:zumbadeline/features/staff/domain/app_user_profile.dart';
 
 void main() {
@@ -44,6 +45,37 @@ void main() {
       expect(activity.name, 'Chant');
       expect(activity.accentColor.toARGB32(), 0xFF7C4DFF);
       expect(activity.iconData, Icons.mic_rounded);
+      expect(activity.isSinging, isTrue);
+      expect(
+        Activity.fromMap({
+          'id': 'dance-id',
+          'name': 'Danse',
+          'icon': 'fitness_center',
+        }).isSinging,
+        isFalse,
+      );
+    });
+
+    test('singing repertoire maps rehearsal and vocal metadata', () {
+      final song = RepertoireSong.fromMap({
+        'id': 'song-id',
+        'activity_id': 'singing-id',
+        'title': 'Chant de répétition',
+        'composer': 'Auteur',
+        'key_signature': 'Ré majeur',
+        'vocal_range': 'Médium',
+        'vocal_part': 'Alto',
+        'accompaniment': 'Piano',
+        'duration_seconds': 185,
+        'rehearsal_notes': 'Travailler le deuxième couplet',
+        'document_path': 'singing-id/song-id.pdf',
+        'last_played_at': '2026-10-19T19:00:00.000Z',
+      });
+
+      expect(song.duration, const Duration(minutes: 3, seconds: 5));
+      expect(song.vocalPart, 'Alto');
+      expect(song.toMap()['rehearsal_notes'], 'Travailler le deuxième couplet');
+      expect(song.toMap()['document_path'], 'singing-id/song-id.pdf');
     });
 
     test('member maps database dates and privacy fields', () {
@@ -200,6 +232,7 @@ void main() {
         'session_type': 'class',
         'starts_at': '2026-10-04T17:00:00.000Z',
         'status': 'scheduled',
+        'attendance_count': 3,
         'recurring_event_id': 'series-id',
         'occurrence_key': '2026-10-04T17:00:00.000Z',
         'equipment_checklist': [
@@ -219,6 +252,7 @@ void main() {
       expect(session.instructors.single.displayName, 'Camille');
       expect(session.instructors.single.role, 'Coordination');
       expect(session.recurringEventId, 'series-id');
+      expect(session.attendanceCount, 3);
       expect(session.occurrenceKey, DateTime.utc(2026, 10, 4, 17));
       expect(session.toMap()['status'], 'scheduled');
       expect(

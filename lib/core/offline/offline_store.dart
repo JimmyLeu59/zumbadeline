@@ -113,9 +113,14 @@ class OfflineStore {
     final sessionId = operation['p_session_id'] as String;
     final memberId = operation['p_member_id'] as String;
     final attendance = await cachedAttendance(sessionId);
-    if (attendance.any((row) => row['member_id'] == memberId)) {
+    if (attendance.any(
+      (row) =>
+          row['member_id'] == memberId &&
+          row['attendance_status'] != 'absent',
+    )) {
       throw StateError('La présence de cet adhérent est déjà enregistrée.');
     }
+    attendance.removeWhere((row) => row['member_id'] == memberId);
 
     final cardId = operation['p_card_id'] as String?;
     List<Map<String, dynamic>>? cardsToUpdate;
@@ -146,6 +151,7 @@ class OfflineStore {
       'member_id': memberId,
       'card_id': cardId,
       'checked_in_at': DateTime.now().toUtc().toIso8601String(),
+      'attendance_status': 'present',
       'offline_pending': true,
     });
     await cacheAttendance(sessionId, attendance);
